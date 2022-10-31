@@ -1,0 +1,17 @@
+name: Docker
+
+on:
+  pull_request:
+    branches: [master]
+    type: [closed]
+
+env:
+  CI_RUST_TOOLCHAIN: 1.61.0
+
+jobs:
+  docker:
+    name: Docker
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo PR merged
