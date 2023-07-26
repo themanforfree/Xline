@@ -7,7 +7,10 @@ use engine::{MemorySnapshotAllocator, RocksSnapshotAllocator, SnapshotAllocator}
 use event_listener::Event;
 use futures::Future;
 use jsonwebtoken::{DecodingKey, EncodingKey};
-use tokio::{net::TcpListener, sync::mpsc::channel};
+use tokio::{
+    net::TcpListener,
+    sync::{mpsc::channel, watch},
+};
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use tonic_health::ServingStatus;

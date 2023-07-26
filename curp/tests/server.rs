@@ -66,7 +66,7 @@ async fn client_build_from_addrs_should_fetch_cluster_from_server() {
     group.stop().await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[abort_on_panic]
 async fn synced_propose() {
     init_logger();

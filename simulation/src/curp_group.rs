@@ -17,7 +17,7 @@ use engine::{Engine, EngineType, Snapshot, SnapshotAllocator};
 use itertools::Itertools;
 use madsim::runtime::NodeHandle;
 use parking_lot::Mutex;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::debug;
 use utils::{
     config::{ClientConfig, CurpConfigBuilder, StorageConfig},
@@ -38,6 +38,7 @@ impl SnapshotAllocator for MemorySnapshotAllocator {
 pub struct CurpNode {
     pub id: ServerId,
     pub addr: String,
+    pub trigger: watch::Sender<bool>,
     pub handle: NodeHandle,
     pub exe_rx: mpsc::UnboundedReceiver<(TestCommand, TestCommandResult)>,
     pub as_rx: mpsc::UnboundedReceiver<(TestCommand, LogIndex)>,
@@ -82,7 +83,7 @@ impl CurpGroup {
                 let store_c = Arc::clone(&store);
                 let role_change_cb = TestRoleChange::default();
                 let role_change_arc = role_change_cb.get_inner_arc();
-
+                let (t, l) = watch::channel(false);
                 let node_handle = handle
                     .create_node()
                     .name(id.to_string())
@@ -124,6 +125,7 @@ impl CurpGroup {
                     CurpNode {
                         id,
                         addr,
+                        trigger: t,
                         handle: node_handle,
                         exe_rx,
                         as_rx,
