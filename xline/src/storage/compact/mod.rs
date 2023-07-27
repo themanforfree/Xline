@@ -9,7 +9,10 @@ use curp::{
 use event_listener::Event;
 use periodic_compactor::PeriodicCompactor;
 use revision_compactor::RevisionCompactor;
-use tokio::{sync::mpsc::Receiver, time::sleep};
+use tokio::{
+    sync::{mpsc::Receiver, watch},
+    time::sleep,
+};
 use utils::config::AutoCompactConfig;
 use uuid::Uuid;
 
@@ -113,10 +116,24 @@ pub(crate) async fn compact_bg_task<DB>(
     batch_limit: usize,
     interval: Duration,
     mut compact_task_rx: Receiver<(i64, Option<Arc<Event>>)>,
+    mut shutdown_listener: watch::Receiver<bool>,
 ) where
     DB: StorageApi,
 {
-    while let Some((revision, listener)) = compact_task_rx.recv().await {
+    loop {
+        let (revision, listener) = tokio::select! {
+            recv = compact_task_rx.recv() => {
+                if let Some((revision, listener)) = recv {
+                    (revision, listener)
+                } else {
+                    break;
+                }
+            }
+            _ = shutdown_listener.changed() => {
+                break;
+            }
+        };
+
         let target_revisions = index
             .compact(revision)
             .into_iter()

@@ -5,7 +5,7 @@ use std::{
 };
 
 use event_listener::Event;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
 use tracing::{debug, warn};
 
@@ -39,6 +39,8 @@ where
     header_gen: Arc<HeaderGenerator>,
     /// Watch progress notify interval
     watch_progress_notify_interval: Duration,
+    /// Shutdown Listener
+    shutdown_listener: watch::Receiver<bool>,
 }
 
 impl<S> WatchServer<S>
@@ -50,12 +52,14 @@ where
         watcher: Arc<KvWatcher<S>>,
         header_gen: Arc<HeaderGenerator>,
         watch_progress_notify_interval: Duration,
+        shutdown_listener: watch::Receiver<bool>,
     ) -> Self {
         Self {
             watcher,
             next_id_gen: Arc::new(WatchIdGenerator::new(1)), // watch_id starts from 1, 0 means auto-generating
             header_gen,
             watch_progress_notify_interval,
+            shutdown_listener,
         }
     }
 
@@ -68,6 +72,7 @@ where
         mut req_rx: ST,
         header_gen: Arc<HeaderGenerator>,
         watch_progress_notify_interval: Duration,
+        mut shutdown_listener: watch::Receiver<bool>,
     ) where
         ST: Stream<Item = Result<WatchRequest, tonic::Status>> + Unpin,
         W: KvWatcherOps,
@@ -87,6 +92,9 @@ where
         tokio::pin!(stop_listener);
         loop {
             tokio::select! {
+                _ = shutdown_listener.changed() => {
+                    break;
+                }
                 req = req_rx.next() => {
                     if let Some(req) = req {
                         match req {
@@ -406,6 +414,7 @@ where
             req_stream,
             Arc::clone(&self.header_gen),
             self.watch_progress_notify_interval,
+            self.shutdown_listener.clone(),
         ));
         Ok(tonic::Response::new(ReceiverStream::new(rx)))
     }
@@ -422,7 +431,7 @@ mod test {
     use parking_lot::Mutex;
     use test_macros::abort_on_panic;
     use tokio::{
-        sync::mpsc,
+        sync::{mpsc, watch},
         time::{sleep, timeout},
     };
     use utils::config::{default_watch_progress_notify_interval, StorageConfig};
@@ -467,6 +476,7 @@ mod test {
     #[tokio::test]
     #[abort_on_panic]
     async fn test_watch_client_closes_connection() -> Result<(), Box<dyn std::error::Error>> {
+        let (tx, rx) = watch::channel(false);
         let (req_tx, req_rx) = mpsc::channel(CHANNEL_SIZE);
         let (res_tx, mut res_rx) = mpsc::channel(CHANNEL_SIZE);
         let req_stream: ReceiverStream<Result<WatchRequest, tonic::Status>> =
@@ -487,6 +497,7 @@ mod test {
             req_stream,
             header_gen,
             default_watch_progress_notify_interval(),
+            rx,
         ));
         req_tx
             .send(Ok(WatchRequest {
@@ -502,6 +513,8 @@ mod test {
         }
         drop(req_tx);
         timeout(Duration::from_secs(3), handle).await??;
+        let _r = tx.send(true);
+        tx.closed().await;
         Ok(())
     }
 
@@ -509,6 +522,7 @@ mod test {
     #[abort_on_panic]
     #[allow(clippy::similar_names)] // use num as suffix
     async fn test_multi_watch_handle() -> Result<(), Box<dyn std::error::Error>> {
+        let (tx, rx) = watch::channel(false);
         let mut mock_watcher = MockKvWatcherOps::new();
         let collection = Arc::new(Mutex::new(HashMap::new()));
         let collection_c = Arc::clone(&collection);
@@ -538,6 +552,7 @@ mod test {
             req_stream1,
             Arc::clone(&header_gen),
             default_watch_progress_notify_interval(),
+            rx.clone(),
         ));
 
         let (req_tx2, req_rx2) = mpsc::channel(CHANNEL_SIZE);
@@ -551,6 +566,7 @@ mod test {
             req_stream2,
             header_gen,
             default_watch_progress_notify_interval(),
+            rx,
         ));
 
         let w_req = WatchRequest {
@@ -568,12 +584,15 @@ mod test {
         }
         handle1.abort();
         handle2.abort();
+        let _r = tx.send(true);
+        tx.closed().await;
         Ok(())
     }
 
     #[tokio::test]
     #[abort_on_panic]
     async fn test_watch_prev_kv() {
+        let (tx, rx) = watch::channel(false);
         let (compact_tx, _compact_rx) = mpsc::channel(COMPACT_CHANNEL_SIZE);
         let index = Arc::new(Index::new());
         let db = DB::open(&StorageConfig::Memory).unwrap();
@@ -589,12 +608,11 @@ mod test {
             compact_tx,
             lease_collection,
         ));
-        let shutdown_trigger = Arc::new(event_listener::Event::new());
         let kv_watcher = KvWatcher::new_arc(
             Arc::clone(&kv_store),
             kv_update_rx,
-            shutdown_trigger,
             Duration::from_millis(10),
+            rx.clone(),
         );
         put(&kv_store, &db, "foo", "old_bar", 2).await;
         put(&kv_store, &db, "foo", "bar", 3).await;
@@ -620,6 +638,7 @@ mod test {
             req_stream,
             Arc::clone(&header_gen),
             default_watch_progress_notify_interval(),
+            rx,
         ));
 
         for _ in 0..4 {
@@ -636,11 +655,15 @@ mod test {
                 assert!(has_prev);
             }
         }
+
+        let _r = tx.send(true);
+        tx.closed().await;
     }
 
     #[tokio::test]
     #[abort_on_panic]
     async fn test_watch_progress() -> Result<(), Box<dyn std::error::Error>> {
+        let (tx, rx) = watch::channel(false);
         let (req_tx, req_rx) = mpsc::channel(CHANNEL_SIZE);
         let (res_tx, mut res_rx) = mpsc::channel(CHANNEL_SIZE);
         let req_stream: ReceiverStream<Result<WatchRequest, tonic::Status>> =
@@ -661,6 +684,7 @@ mod test {
             req_stream,
             header_gen,
             Duration::from_millis(100),
+            rx,
         ));
         req_tx
             .send(Ok(WatchRequest {
@@ -694,12 +718,15 @@ mod test {
         assert!(c >= 9);
         drop(req_tx);
         handle.await.unwrap();
+        let _r = tx.send(true);
+        tx.closed().await;
         Ok(())
     }
 
     #[tokio::test]
     async fn watch_task_should_terminate_when_response_tx_closed(
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let (tx, rx) = watch::channel(false);
         let (req_tx, req_rx) = mpsc::channel(CHANNEL_SIZE);
         let (res_tx, res_rx) = mpsc::channel(CHANNEL_SIZE);
         let req_stream: ReceiverStream<Result<WatchRequest, tonic::Status>> =
@@ -720,6 +747,7 @@ mod test {
             req_stream,
             header_gen,
             Duration::from_millis(100),
+            rx,
         ));
 
         req_tx
@@ -742,11 +770,14 @@ mod test {
             .await?;
 
         assert!(timeout(Duration::from_secs(10), handle).await.is_ok());
+        let _r = tx.send(true);
+        tx.closed().await;
         Ok(())
     }
 
     #[tokio::test]
     async fn watch_compacted_revision_should_fail() {
+        let (tx, rx) = watch::channel(false);
         let (compact_tx, _compact_rx) = mpsc::channel(COMPACT_CHANNEL_SIZE);
         let index = Arc::new(Index::new());
         let db = DB::open(&StorageConfig::Memory).unwrap();
@@ -762,12 +793,11 @@ mod test {
             compact_tx,
             lease_collection,
         ));
-        let shutdown_trigger = Arc::new(event_listener::Event::new());
         let kv_watcher = KvWatcher::new_arc(
             Arc::clone(&kv_store),
             kv_update_rx,
-            shutdown_trigger,
             Duration::from_millis(10),
+            rx.clone(),
         );
         put(&kv_store, &db, "foo", "old_bar", 2).await;
         put(&kv_store, &db, "foo", "bar", 3).await;
@@ -786,7 +816,6 @@ mod test {
             })),
         };
         req_tx.send(Ok(create_watch_req(1, 2))).await.unwrap();
-        // req_tx.send(Ok(create_watch_req(3, 4))).await.unwrap();
         let (res_tx, mut res_rx) = mpsc::channel(CHANNEL_SIZE);
         let _hd = tokio::spawn(WatchServer::<DB>::task(
             Arc::clone(&next_id_gen),
@@ -795,6 +824,7 @@ mod test {
             req_stream,
             Arc::clone(&header_gen),
             default_watch_progress_notify_interval(),
+            rx,
         ));
 
         // It's allowed to create a compacted watch request, but it will immediately cancel. Doing so is for the compatibility with etcdctl
@@ -816,5 +846,7 @@ mod test {
         assert!(!watch_event_res.canceled);
         assert_eq!(watch_event_res.compact_revision, 0);
         assert_eq!(watch_event_res.watch_id, 2);
+        let _r = tx.send(true);
+        tx.closed().await;
     }
 }

@@ -9,7 +9,6 @@ use jsonwebtoken::{DecodingKey, EncodingKey};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use tokio::{
     net::TcpListener,
-    sync::broadcast::{self, Sender},
     time::{self, Duration},
 };
 use utils::config::{ClientConfig, CompactConfig, CurpConfig, ServerTimeout, StorageConfig};
@@ -23,8 +22,8 @@ pub struct Cluster {
     all_members: HashMap<String, String>,
     /// Client of cluster
     client: Option<Client>,
-    /// Stop sender
-    stop_tx: Option<Sender<()>>,
+    /// Xline servers
+    servers: Vec<XlineServer>,
     /// Cluster size
     size: usize,
     /// storage paths
@@ -47,7 +46,7 @@ impl Cluster {
             listeners,
             all_members,
             client: None,
-            stop_tx: None,
+            servers: vec![],
             size,
             paths: vec![],
         }
@@ -59,12 +58,9 @@ impl Cluster {
 
     /// Start `Cluster`
     pub async fn start(&mut self) {
-        let (stop_tx, _) = broadcast::channel(1);
-
         for i in 0..self.size {
             let name = format!("server{}", i);
             let is_leader = i == 0;
-            let mut rx = stop_tx.subscribe();
             let listener = self.listeners.remove(&i).unwrap();
             let path = if let Some(path) = self.paths.get(i) {
                 path.clone()
@@ -99,7 +95,6 @@ impl Cluster {
                 }
             });
         }
-        self.stop_tx = Some(stop_tx);
         // Sleep 30ms, wait for the server to start
         time::sleep(Duration::from_millis(300)).await;
     }
@@ -140,12 +135,10 @@ impl Cluster {
 
 impl Drop for Cluster {
     fn drop(&mut self) {
-        if let Some(ref stop_tx) = self.stop_tx {
-            let _ = stop_tx.send(());
-        }
-        for path in &self.paths {
-            let _ignore = std::fs::remove_dir_all(path);
-        }
+        assert!(
+            self.servers.iter().all(|s| s.is_stopped()),
+            "cluster is not stopped, please stop it manually by `cluster.stop().await`"
+        );
     }
 }
 

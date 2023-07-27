@@ -4,7 +4,7 @@ use async_stream::{stream, try_stream};
 use clippy_utilities::Cast;
 use curp::{client::Client, cmd::ProposeId, members::ClusterInfo};
 use futures::stream::Stream;
-use tokio::time;
+use tokio::{sync::watch, time};
 use tracing::{debug, warn};
 use uuid::Uuid;
 use xlineapi::RequestWithToken;
@@ -44,6 +44,8 @@ where
     id_gen: Arc<IdGenerator>,
     /// cluster information
     cluster_info: Arc<ClusterInfo>,
+    /// Shutdown listener
+    shutdown_listener: watch::Receiver<bool>,
 }
 
 impl<S> LeaseServer<S>
@@ -57,6 +59,7 @@ where
         client: Arc<Client<Command>>,
         id_gen: Arc<IdGenerator>,
         cluster_info: Arc<ClusterInfo>,
+        shutdown_listener: watch::Receiver<bool>,
     ) -> Arc<Self> {
         let lease_server = Arc::new(Self {
             lease_storage,
@@ -64,14 +67,24 @@ where
             client,
             id_gen,
             cluster_info,
+            shutdown_listener,
         });
         let _h = tokio::spawn(Self::revoke_expired_leases_task(Arc::clone(&lease_server)));
         lease_server
     }
 
     /// Task of revoke expired leases
+    #[allow(clippy::integer_arithmetic)] // Introduced by tokio::select!
     async fn revoke_expired_leases_task(lease_server: Arc<LeaseServer<S>>) {
+        let mut listener = lease_server.shutdown_listener.clone();
         loop {
+            tokio::select! {
+                _ = listener.changed() => {
+                    debug!("Lease revoke expired leases shutdown");
+                    break;
+                }
+                _ = time::sleep(DEFAULT_LEASE_REQUEST_TIME) => {}
+            }
             // only leader will check expired lease
             if lease_server.lease_storage.is_primary() {
                 for id in lease_server.lease_storage.find_expired_leases() {
@@ -95,8 +108,6 @@ where
                     });
                 }
             }
-
-            time::sleep(DEFAULT_LEASE_REQUEST_TIME).await;
         }
     }
 
@@ -133,13 +144,28 @@ where
     }
 
     /// Handle keep alive at leader
+    #[allow(clippy::integer_arithmetic)] // Introduced by tokio::select!
     async fn leader_keep_alive(
         &self,
         mut request_stream: tonic::Streaming<LeaseKeepAliveRequest>,
+        mut shutdown_listener: watch::Receiver<bool>,
     ) -> Pin<Box<dyn Stream<Item = Result<LeaseKeepAliveResponse, tonic::Status>> + Send>> {
         let lease_storage = Arc::clone(&self.lease_storage);
         let stream = try_stream! {
-            while let Some(keep_alive_req) = request_stream.message().await? {
+           loop {
+                let keep_alive_req: LeaseKeepAliveRequest = tokio::select! {
+                    _ = shutdown_listener.changed() => {
+                        debug!("Lease keep alive shutdown");
+                        break;
+                    }
+                    res = request_stream.message() => {
+                        if let Ok(Some(keep_alive_req)) = res {
+                            keep_alive_req
+                        } else {
+                            break;
+                        }
+                    }
+                };
                 debug!("Receive LeaseKeepAliveRequest {:?}", keep_alive_req);
                 let ttl = if lease_storage.is_primary() {
                     lease_storage.wait_synced(keep_alive_req.id).await;
@@ -159,10 +185,12 @@ where
     }
 
     /// Handle keep alive at follower
+    #[allow(clippy::integer_arithmetic)] // Introduced by tokio::select!
     async fn follower_keep_alive(
         &self,
         mut request_stream: tonic::Streaming<LeaseKeepAliveRequest>,
         leader_addr: &str,
+        mut shutdown_listener: watch::Receiver<bool>,
     ) -> Result<
         Pin<Box<dyn Stream<Item = Result<LeaseKeepAliveResponse, tonic::Status>> + Send>>,
         tonic::Status,
@@ -172,9 +200,22 @@ where
             .map_err(|_e| tonic::Status::internal("Connect to leader error: {e}"))?;
 
         let redirect_stream = stream! {
-            while let Ok(Some(req)) = request_stream.message().await {
-                yield req;
+            loop {
+                tokio::select! {
+                    _ = shutdown_listener.changed() => {
+                        debug!("Lease keep alive shutdown");
+                        break;
+                    }
+                    res = request_stream.message() => {
+                        if let Ok(Some(keep_alive_req)) = res {
+                            yield keep_alive_req;
+                        } else {
+                            break;
+                        }
+                    }
+                }
             }
+
         };
 
         let stream = lease_client
@@ -228,7 +269,9 @@ where
         let request_stream = request.into_inner();
         let stream = loop {
             if self.lease_storage.is_primary() {
-                break self.leader_keep_alive(request_stream).await;
+                break self
+                    .leader_keep_alive(request_stream, self.shutdown_listener.clone())
+                    .await;
             }
             let leader_id = self
                 .client
@@ -246,7 +289,11 @@ where
                     )
                 });
                 break self
-                    .follower_keep_alive(request_stream, leader_addr)
+                    .follower_keep_alive(
+                        request_stream,
+                        leader_addr,
+                        self.shutdown_listener.clone(),
+                    )
                     .await?;
             }
         };
