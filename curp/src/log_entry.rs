@@ -24,6 +24,8 @@ pub(crate) enum EntryData<C> {
     Command(Arc<C>),
     /// `ConfChange` entry
     ConfChange(ProposeId),
+    /// `ConfChange` entry
+    Shutdown(ProposeId),
 }
 
 impl<C> LogEntry<C>
@@ -36,6 +38,15 @@ where
             term,
             index,
             entry_data: EntryData::Command(cmd),
+        }
+    }
+
+    /// Create a new `LogEntry` of a `ConfChange`
+    pub(super) fn new_shutdown(index: LogIndex, term: u64, propose_id: ProposeId) -> Self {
+        Self {
+            term,
+            index,
+            entry_data: EntryData::Shutdown(propose_id),
         }
     }
 
@@ -53,7 +64,7 @@ where
     pub(super) fn id(&self) -> &ProposeId {
         match self.entry_data {
             EntryData::Command(ref cmd) => cmd.id(),
-            EntryData::ConfChange(ref id) => id,
+            EntryData::ConfChange(ref id) | EntryData::Shutdown(ref id) => id,
         }
     }
 }

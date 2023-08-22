@@ -13,8 +13,8 @@ pub(crate) use self::proto::{
     wait_synced_response::{Success, SyncResult as SyncResultRaw},
     AppendEntriesRequest, AppendEntriesResponse, Empty, FetchClusterRequest, FetchClusterResponse,
     FetchReadStateRequest, FetchReadStateResponse, IdSet, InstallSnapshotRequest,
-    InstallSnapshotResponse, ProposeError as PbProposeErrorOuter, RedirectData,
-    SyncError as PbSyncErrorOuter, VoteRequest, VoteResponse, WaitSyncedRequest,
+    InstallSnapshotResponse, ProposeError as PbProposeErrorOuter, RedirectData, ShutdownRequest,
+    ShutdownResponse, SyncError as PbSyncErrorOuter, VoteRequest, VoteResponse, WaitSyncedRequest,
     WaitSyncedResponse,
 };
 pub use self::proto::{
@@ -408,5 +408,12 @@ impl FetchReadStateResponse {
         Self {
             read_state: Some(state),
         }
+    }
+}
+
+impl ShutdownRequest {
+    /// Create a new shutdown request
+    pub(crate) fn new(id: ProposeId) -> Self {
+        Self { id: id.into() }
     }
 }

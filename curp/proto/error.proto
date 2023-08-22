@@ -12,6 +12,8 @@ message ProposeError {
         Empty duplicated = 2;
         SyncError sync_error = 3;
         string encode_error = 4;
+        Empty not_leader = 5;
+        Empty shutdown = 6;
     }
 }
 
