@@ -5,7 +5,6 @@ use curp_external_api::cmd::PbSerializeError;
 use engine::SnapshotApi;
 use event_listener::Event;
 use futures::{pin_mut, stream::FuturesUnordered, Stream, StreamExt};
-use itertools::Itertools;
 use madsim::rand::{thread_rng, Rng};
 use parking_lot::{Mutex, RwLock};
 use thiserror::Error;
@@ -34,8 +33,9 @@ use crate::{
         self, connect::ConnectApi, AppendEntriesRequest, AppendEntriesResponse,
         FetchClusterRequest, FetchClusterResponse, FetchLeaderRequest, FetchLeaderResponse,
         FetchReadStateRequest, FetchReadStateResponse, InstallSnapshotRequest,
-        InstallSnapshotResponse, ProposeRequest, ProposeResponse, VoteRequest, VoteResponse,
-        WaitSyncedRequest, WaitSyncedResponse,
+        InstallSnapshotResponse, ProposeConfChangeRequest, ProposeConfChangeResponse,
+        ProposeRequest, ProposeResponse, VoteRequest, VoteResponse, WaitSyncedRequest,
+        WaitSyncedResponse,
     },
     server::{cmd_worker::CEEventTxApi, raw_curp::SyncAction, storage::db::DB},
     snapshot::{Snapshot, SnapshotMeta},
@@ -121,7 +121,7 @@ pub(super) struct CurpNode<C: Command, RC: RoleChange> {
 
 // handlers
 impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
-    /// Handle "propose" requests
+    /// Handle `Propose` requests
     pub(super) async fn propose(&self, req: ProposeRequest) -> Result<ProposeResponse, CurpError> {
         let cmd: Arc<C> = Arc::new(req.cmd()?);
 
@@ -137,6 +137,15 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
         };
 
         Ok(resp)
+    }
+
+    /// Handle `ProposeConfChange` requests
+    #[allow(clippy::todo, clippy::unused_async)] // TODO: implement this
+    pub(super) async fn propose_conf_change(
+        &self,
+        _req: ProposeConfChangeRequest,
+    ) -> Result<ProposeConfChangeResponse, CurpError> {
+        todo!("propose_conf_change")
     }
 
     /// Handle `AppendEntries` requests
@@ -213,7 +222,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
         _req: FetchClusterRequest,
     ) -> Result<FetchClusterResponse, CurpError> {
         let (leader_id, term) = self.curp.leader();
-        let all_members = self.curp.cluster().all_members();
+        let all_members = self.curp.cluster().all_members_addrs();
         Ok(FetchClusterResponse::new(leader_id, all_members, term))
     }
 
@@ -320,22 +329,18 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
     }
 
     /// Responsible for bringing up `sync_follower_task` when self becomes leader
-    async fn sync_follower_daemon(
-        curp: Arc<RawCurp<C, RC>>,
-        connect: Arc<impl ConnectApi + ?Sized>,
-        sync_event: Arc<Event>,
-    ) {
+    async fn sync_followers_daemon(curp: Arc<RawCurp<C, RC>>) {
         let leader_event = curp.leader_event();
         loop {
             if !curp.is_leader() {
                 leader_event.listen().await;
             }
-            Self::sync_follower_task(
-                Arc::clone(&curp),
-                Arc::clone(&connect),
-                Arc::clone(&sync_event),
-            )
-            .await;
+            let peers = curp.cluster().peers_addrs();
+            let futs = rpc::connect(peers).await.map(|(id, connect)| {
+                let sync_event = curp.sync_event(id);
+                Self::sync_follower_task(Arc::clone(&curp), connect, sync_event)
+            });
+            _ = futures::future::join_all(futs).await;
         }
     }
 
@@ -536,29 +541,17 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
         shutdown_trigger: Arc<Event>,
         log_rx: tokio::sync::mpsc::UnboundedReceiver<Arc<LogEntry<C>>>,
     ) {
-        let connects = rpc::connect(cluster_info.peers())
+        let connects = rpc::connect(cluster_info.peers_addrs())
             .await
             .collect::<HashMap<_, _>>();
         let election_task = tokio::spawn(Self::election_task(Arc::clone(&curp), connects.clone()));
-        let sync_task_daemons = connects
-            .into_iter()
-            .map(|(server_id, connect)| {
-                tokio::spawn(Self::sync_follower_daemon(
-                    Arc::clone(&curp),
-                    connect,
-                    curp.sync_event(server_id),
-                ))
-            })
-            .collect_vec();
-
+        let sync_followers_daemon = tokio::spawn(Self::sync_followers_daemon(Arc::clone(&curp)));
         let log_persist_task = tokio::spawn(Self::log_persist_task(log_rx, storage));
 
         let _ig = tokio::spawn(async move {
             shutdown_trigger.listen().await;
             election_task.abort();
-            for sync_task in sync_task_daemons {
-                sync_task.abort();
-            }
+            sync_followers_daemon.abort();
             log_persist_task.abort();
         });
     }

@@ -116,8 +116,32 @@ message FetchReadStateResponse {
     }
 }
 
+
+
+message ProposeConfChangeRequest {
+    enum ConfChangeType {
+        Add = 0;
+        AddLearner = 1;
+        Remove = 2;
+        Update = 3;
+    }
+    message ConfChange {
+        ConfChangeType change_type = 1;
+        uint64 node_id = 2;
+        string address = 3;
+    }
+    string id = 1;
+    repeated ConfChange changes = 2;
+}
+
+message ProposeConfChangeResponse {
+    bool ok = 1;
+}
+
+
 service Protocol {
     rpc Propose(ProposeRequest) returns (ProposeResponse);
+    rpc ProposeConfChange (ProposeConfChangeRequest) returns (ProposeConfChangeResponse);
     rpc WaitSynced(WaitSyncedRequest) returns (WaitSyncedResponse);
     rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
     rpc Vote(VoteRequest) returns (VoteResponse);

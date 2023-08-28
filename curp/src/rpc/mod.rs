@@ -6,6 +6,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use self::proto::{cmd_result::Result as CmdResultInner, CmdResult};
 pub(crate) use self::proto::{
     fetch_read_state_response::ReadState,
+    propose_conf_change_request::{ConfChange, ConfChangeType},
     propose_error::ProposeError as PbProposeError,
     propose_response::ExeResult,
     protocol_server::Protocol,
@@ -13,9 +14,9 @@ pub(crate) use self::proto::{
     wait_synced_response::{Success, SyncResult as SyncResultRaw},
     AppendEntriesRequest, AppendEntriesResponse, Empty, FetchClusterRequest, FetchClusterResponse,
     FetchReadStateRequest, FetchReadStateResponse, IdSet, InstallSnapshotRequest,
-    InstallSnapshotResponse, ProposeError as PbProposeErrorOuter, RedirectData,
-    SyncError as PbSyncErrorOuter, VoteRequest, VoteResponse, WaitSyncedRequest,
-    WaitSyncedResponse,
+    InstallSnapshotResponse, ProposeConfChangeRequest, ProposeConfChangeResponse,
+    ProposeError as PbProposeErrorOuter, RedirectData, SyncError as PbSyncErrorOuter, VoteRequest,
+    VoteResponse, WaitSyncedRequest, WaitSyncedResponse,
 };
 pub use self::proto::{
     propose_response, protocol_client, protocol_server::ProtocolServer, FetchLeaderRequest,
@@ -407,6 +408,46 @@ impl FetchReadStateResponse {
     pub(crate) fn new(state: ReadState) -> Self {
         Self {
             read_state: Some(state),
+        }
+    }
+}
+
+#[allow(dead_code)] // TODO: remove
+#[allow(clippy::as_conversions)] // those conversions are safe
+impl ConfChange {
+    /// Create a new `ConfChange` to add a node
+    pub(crate) fn add(node_id: ServerId, address: String) -> Self {
+        Self {
+            change_type: ConfChangeType::Add as i32,
+            node_id,
+            address,
+        }
+    }
+
+    /// Create a new `ConfChange` to remove a node
+    pub(crate) fn remove(node_id: ServerId) -> Self {
+        Self {
+            change_type: ConfChangeType::Remove as i32,
+            node_id,
+            address: String::new(),
+        }
+    }
+
+    /// Create a new `ConfChange` to update a node
+    pub(crate) fn update(node_id: ServerId, address: String) -> Self {
+        Self {
+            change_type: ConfChangeType::Update as i32,
+            node_id,
+            address,
+        }
+    }
+
+    /// Create a new `ConfChange` to add a learner node
+    pub(crate) fn add_learner(node_id: ServerId, address: String) -> Self {
+        Self {
+            change_type: ConfChangeType::AddLearner as i32,
+            node_id,
+            address,
         }
     }
 }

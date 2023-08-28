@@ -3,8 +3,11 @@ use std::{
     sync::Arc,
 };
 
+use dashmap::{
+    mapref::one::{Ref, RefMut},
+    DashMap,
+};
 use madsim::rand::{thread_rng, Rng};
-use parking_lot::{Mutex, MutexGuard};
 use tracing::debug;
 
 use super::Role;
@@ -48,19 +51,29 @@ pub(super) struct CandidateState<C> {
 }
 
 /// Status of a follower
-#[derive(Debug)]
-struct FollowerStatus {
+#[derive(Debug, Copy, Clone)]
+pub(super) struct FollowerStatus {
     /// Index of the next log entry to send to that follower
     next_index: LogIndex,
     /// Index of highest log entry known to be replicated on that follower
     match_index: LogIndex,
 }
 
+impl FollowerStatus {
+    /// Create a `FollowerStatus`
+    pub(super) fn new(next_index: LogIndex, match_index: LogIndex) -> Self {
+        Self {
+            next_index,
+            match_index,
+        }
+    }
+}
+
 /// Additional state for the leader, all volatile
 #[derive(Debug)]
 pub(super) struct LeaderState {
     /// For each server, the leader maintains its status
-    statuses: HashMap<ServerId, Mutex<FollowerStatus>>,
+    statuses: DashMap<ServerId, FollowerStatus>,
 }
 
 impl State {
@@ -103,25 +116,41 @@ impl LeaderState {
         Self {
             statuses: others
                 .iter()
-                .map(|o| {
-                    (
-                        *o,
-                        Mutex::new(FollowerStatus {
-                            next_index: 1,
-                            match_index: 0,
-                        }),
-                    )
-                })
+                .map(|o| (*o, FollowerStatus::new(1, 0)))
                 .collect(),
         }
     }
 
+    /// Get all status for a server
+    pub(super) fn get_all_statuses(&self) -> HashMap<ServerId, FollowerStatus> {
+        self.statuses
+            .iter()
+            .map(|e| (*e.key(), *e.value()))
+            .collect()
+    }
+
+    /// insert new status for id
+    pub(super) fn insert(&self, id: ServerId) {
+        _ = self.statuses.insert(id, FollowerStatus::new(1, 0));
+    }
+
+    /// Remove a status
+    pub(super) fn remove(&self, id: ServerId) {
+        _ = self.statuses.remove(&id);
+    }
+
     /// Get status for a server
-    fn get_status(&self, id: ServerId) -> MutexGuard<'_, FollowerStatus> {
+    fn get_status(&self, id: ServerId) -> Ref<'_, u64, FollowerStatus> {
         self.statuses
             .get(&id)
             .unwrap_or_else(|| unreachable!("no status for {id}"))
-            .lock()
+    }
+
+    /// Get mutable status for a server
+    fn get_status_mut(&self, id: ServerId) -> RefMut<'_, u64, FollowerStatus> {
+        self.statuses
+            .get_mut(&id)
+            .unwrap_or_else(|| unreachable!("no status for {id}"))
     }
 
     /// Get `next_index` for server
@@ -136,12 +165,12 @@ impl LeaderState {
 
     /// Update `next_index` for server
     pub(super) fn update_next_index(&self, id: ServerId, index: LogIndex) {
-        self.get_status(id).next_index = index;
+        self.get_status_mut(id).next_index = index;
     }
 
     /// Update `match_index` for server, will update `next_index` if possible
     pub(super) fn update_match_index(&self, id: ServerId, index: LogIndex) {
-        let mut status = self.get_status(id);
+        let mut status = self.get_status_mut(id);
 
         if status.match_index >= index {
             return;
@@ -177,7 +206,7 @@ trait ClusterConfig {
 }
 
 /// `MajorityConfig` is a set of IDs that uses majority quorums to make decisions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct MajorityConfig {
     /// The voters in the cluster
     voters: HashSet<ServerId>,
@@ -189,6 +218,26 @@ impl MajorityConfig {
         Self {
             voters: voters.collect(),
         }
+    }
+
+    /// Get voters set
+    pub(super) fn voters(&self) -> &HashSet<ServerId> {
+        &self.voters
+    }
+
+    /// Insert a voter
+    pub(super) fn insert(&mut self, id: ServerId) -> bool {
+        self.voters.insert(id)
+    }
+
+    /// Remove a voter
+    pub(super) fn remove(&mut self, id: ServerId) -> bool {
+        self.voters.remove(&id)
+    }
+
+    /// Check if a voter exists
+    pub(super) fn contains(&self, id: ServerId) -> bool {
+        self.voters.contains(&id)
     }
 
     /// Get quorum: the smallest number of servers who must be online for the cluster to work

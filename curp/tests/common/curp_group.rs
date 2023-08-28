@@ -82,7 +82,7 @@ impl CurpGroup {
                 let store = Arc::clone(&ce.store);
 
                 let cluster_info = Arc::new(ClusterInfo::new(all_members.clone(), &name));
-                all = cluster_info.all_members();
+                all = cluster_info.all_members_addrs();
                 let id = cluster_info.self_id();
                 let rt = tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(2)

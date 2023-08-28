@@ -20,8 +20,9 @@ use crate::{
     rpc::{
         AppendEntriesRequest, AppendEntriesResponse, FetchClusterRequest, FetchClusterResponse,
         FetchLeaderRequest, FetchLeaderResponse, FetchReadStateRequest, FetchReadStateResponse,
-        InstallSnapshotRequest, InstallSnapshotResponse, ProposeRequest, ProposeResponse,
-        ProtocolServer, VoteRequest, VoteResponse, WaitSyncedRequest, WaitSyncedResponse,
+        InstallSnapshotRequest, InstallSnapshotResponse, ProposeConfChangeRequest,
+        ProposeConfChangeResponse, ProposeRequest, ProposeResponse, ProtocolServer, VoteRequest,
+        VoteResponse, WaitSyncedRequest, WaitSyncedResponse,
     },
     SnapshotAllocator,
 };
@@ -69,6 +70,17 @@ impl<C: 'static + Command, RC: RoleChange + 'static> crate::rpc::Protocol for Rp
         request.metadata().extract_span();
         Ok(tonic::Response::new(
             self.inner.propose(request.into_inner()).await?,
+        ))
+    }
+
+    #[instrument(skip_all, name = "curp_propose_conf_change")]
+    async fn propose_conf_change(
+        &self,
+        request: tonic::Request<ProposeConfChangeRequest>,
+    ) -> Result<tonic::Response<ProposeConfChangeResponse>, tonic::Status> {
+        request.metadata().extract_span();
+        Ok(tonic::Response::new(
+            self.inner.propose_conf_change(request.into_inner()).await?,
         ))
     }
 
