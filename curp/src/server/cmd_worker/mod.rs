@@ -63,7 +63,7 @@ async fn cmd_worker<
     done_tx: flume::Sender<(Task<C>, bool)>,
     curp: Arc<RawCurp<C, RC>>,
     ce: Arc<CE>,
-    // This task will safely exit when the log_tx is dropped, but we still
+    // This task will safely exit when the dispatch_rx is dropped, but we still
     // need to keep the shutdown_listener here to notify the shutdown trigger
     _shutdown_listener: shutdown::Listener,
 ) {

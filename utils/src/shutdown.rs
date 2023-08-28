@@ -7,7 +7,7 @@ use tokio::sync::watch;
 use tracing::warn;
 
 /// Shutdown Signal
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum Signal {
     /// The initial state, the cluster is running.
@@ -31,7 +31,7 @@ pub struct TriggerInner {
     /// Sender for shutdown signal.
     trigger: watch::Sender<Signal>,
     /// State of mpsc channel.
-    mpsc_change_shutdown: AtomicBool,
+    mpmc_channel_shutdown: AtomicBool,
     /// State of sync follower daemon.
     sync_follower_daemon_shutdown: AtomicBool,
 }
@@ -56,7 +56,7 @@ impl Trigger {
     #[inline]
     #[must_use]
     pub fn check_partial_shutdown(&self) -> bool {
-        self.inner.mpsc_change_shutdown.load(Ordering::Relaxed)
+        self.inner.mpmc_channel_shutdown.load(Ordering::Relaxed)
             && self
                 .inner
                 .sync_follower_daemon_shutdown
@@ -67,7 +67,7 @@ impl Trigger {
     #[inline]
     pub fn mark_channel_shutdown(&self) {
         self.inner
-            .mpsc_change_shutdown
+            .mpmc_channel_shutdown
             .store(true, Ordering::Relaxed);
         if self.check_partial_shutdown() {
             self.shutdown();
@@ -133,7 +133,7 @@ impl Listener {
     pub async fn wait_self_shutdown(&mut self) {
         loop {
             let _ig = self.listener.changed().await;
-            if Signal::SelfShutdown == *self.listener.borrow() {
+            if matches!(*self.listener.borrow(), Signal::SelfShutdown) {
                 break;
             }
         }
@@ -154,7 +154,7 @@ pub fn channel() -> (Trigger, Listener) {
     let trigger = Trigger {
         inner: Arc::new(TriggerInner {
             trigger: tx,
-            mpsc_change_shutdown: AtomicBool::new(false),
+            mpmc_channel_shutdown: AtomicBool::new(false),
             sync_follower_daemon_shutdown: AtomicBool::new(false),
         }),
     };

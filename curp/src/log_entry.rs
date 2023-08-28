@@ -24,7 +24,7 @@ pub(crate) enum EntryData<C> {
     Command(Arc<C>),
     /// `ConfChange` entry
     ConfChange(ProposeId),
-    /// `ConfChange` entry
+    /// `Shutdown` entry
     Shutdown(ProposeId),
 }
 
@@ -41,7 +41,7 @@ where
         }
     }
 
-    /// Create a new `LogEntry` of a `ConfChange`
+    /// Create a new `LogEntry` of `Shutdown`
     pub(super) fn new_shutdown(index: LogIndex, term: u64, propose_id: ProposeId) -> Self {
         Self {
             term,
@@ -50,7 +50,7 @@ where
         }
     }
 
-    /// Create a new `LogEntry` of a `ConfChange`
+    /// Create a new `LogEntry` of `ConfChange`
     #[allow(dead_code)] // TODO: remove this when we implement conf change
     pub(super) fn new_conf_change(index: LogIndex, term: u64, id: ProposeId) -> Self {
         Self {

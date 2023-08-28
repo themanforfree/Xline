@@ -367,7 +367,7 @@ where
         }
     }
 
-    /// The slow round of Curp protocol
+    /// The shutdown rpc of curp protocol
     #[instrument(skip_all)]
     pub async fn shutdown(&self, id: ProposeId) -> Result<(), ProposeError> {
         loop {
