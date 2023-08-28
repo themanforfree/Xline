@@ -366,6 +366,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
         loop {
             if !curp.is_leader() {
                 shutdown_trigger.mark_sync_daemon_shutdown();
+                shutdown_trigger.check_and_shutdown();
                 tokio::select! {
                     _ = shutdown_listener.wait_self_shutdown() => {
                         debug!("sync follower daemon exits");
@@ -387,6 +388,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
             if shutdown_listener.is_shutdown() {
                 debug!("sync follower daemon exits");
                 shutdown_trigger.mark_sync_daemon_shutdown();
+                shutdown_trigger.check_and_shutdown();
                 return;
             }
         }
@@ -410,7 +412,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
         loop {
             // a sync is either triggered by an heartbeat timeout event or when new log entries arrive
             tokio::select! {
-                sig = shutdown_listener.wait() => {
+                sig = shutdown_listener.wait(), if !is_shutdown_state => {
                     match sig {
                         Some(Signal::Running) => {
                             unreachable!("shutdown trigger should send ClusterShutdown or SelfShutdown")

@@ -52,26 +52,12 @@ impl Trigger {
         };
     }
 
-    /// Check if the mpsc channel and sync follower daemon has been shutdown.
-    #[inline]
-    #[must_use]
-    pub fn check_partial_shutdown(&self) -> bool {
-        self.inner.mpmc_channel_shutdown.load(Ordering::Relaxed)
-            && self
-                .inner
-                .sync_follower_daemon_shutdown
-                .load(Ordering::Relaxed)
-    }
-
     /// Mark mpsc channel shutdown.
     #[inline]
     pub fn mark_channel_shutdown(&self) {
         self.inner
             .mpmc_channel_shutdown
             .store(true, Ordering::Relaxed);
-        if self.check_partial_shutdown() {
-            self.shutdown();
-        }
     }
 
     /// Mark sync daemon shutdown.
@@ -80,7 +66,18 @@ impl Trigger {
         self.inner
             .sync_follower_daemon_shutdown
             .store(true, Ordering::Relaxed);
-        if self.check_partial_shutdown() {
+    }
+
+    /// Check if the mpsc channel and sync follower daemon has been shutdown.
+    /// and send the shutdown signal when both are shutdown.
+    #[inline]
+    pub fn check_and_shutdown(&self) {
+        if self.inner.mpmc_channel_shutdown.load(Ordering::Relaxed)
+            && self
+                .inner
+                .sync_follower_daemon_shutdown
+                .load(Ordering::Relaxed)
+        {
             self.shutdown();
         }
     }

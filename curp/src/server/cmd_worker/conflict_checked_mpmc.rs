@@ -565,7 +565,7 @@ async fn conflict_checked_mpmc_task<C: 'static + Command, CE: 'static + CommandE
     loop {
         tokio::select! {
             biased; // cleanup filter first so that the buffer in filter can be kept as small as possible
-            sig = shutdown_listener.wait() => {
+            sig = shutdown_listener.wait(), if !is_shutdown_state => {
                 match sig {
                     Some(Signal::Running) => {
                         unreachable!("shutdown trigger should send ClusterShutdown or SelfShutdown")
@@ -592,6 +592,7 @@ async fn conflict_checked_mpmc_task<C: 'static + Command, CE: 'static + CommandE
 
         if is_shutdown_state && filter.vs.is_empty() {
             shutdown_trigger.mark_channel_shutdown();
+            shutdown_trigger.check_and_shutdown();
             return;
         }
     }
