@@ -199,8 +199,9 @@ async fn new_leader_will_recover_spec_cmds_cond1() {
         connect.propose(req1.clone()).await.unwrap();
     }
 
-    // 2: disable leader1
+    // 2: disable leader1 and wait election
     group.disable_node(leader1);
+    sleep_secs(5).await;
 
     // 3: the client should automatically find the new leader and get the response
     assert_eq!(
@@ -238,8 +239,9 @@ async fn new_leader_will_recover_spec_cmds_cond2() {
 
     let leader1 = group.get_leader().await.0;
 
-    // 1: disable leader1
+    // 1: disable leader1 and wait election
     group.disable_node(leader1);
+    sleep_secs(5).await;
 
     // now when the client proposes, all others will receive the proposal.
     // but since a new round of election has not started yet, none of them will execute them

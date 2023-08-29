@@ -89,7 +89,12 @@ impl CurpGroup {
                     .ip(format!("192.168.1.{}", i + 1).parse().unwrap())
                     .init(move || {
                         let (trigger, _listener) = shutdown::channel();
-                        let ce = TestCE::new(name.clone(), exe_tx.clone(), as_tx.clone());
+                        let ce = TestCE::new(
+                            name.clone(),
+                            exe_tx.clone(),
+                            as_tx.clone(),
+                            StorageConfig::Memory,
+                        );
                         store_c.lock().replace(Arc::clone(&ce.store));
                         let is_leader = "S0" == name;
 
@@ -394,7 +399,7 @@ impl<C: Command + 'static> SimClient<C> {
     pub async fn get_leader_id(&self) -> ServerId {
         let inner = self.inner.clone();
         self.handle
-            .spawn(async move { inner.get_leader_id().await })
+            .spawn(async move { inner.get_leader_id().await.unwrap() })
             .await
             .unwrap()
     }
@@ -403,7 +408,7 @@ impl<C: Command + 'static> SimClient<C> {
     pub async fn get_leader_id_from_curp(&self) -> ServerId {
         let inner = self.inner.clone();
         self.handle
-            .spawn(async move { inner.get_leader_id_from_curp().await })
+            .spawn(async move { inner.get_leader_id_from_curp().await.unwrap() })
             .await
             .unwrap()
     }

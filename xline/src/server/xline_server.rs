@@ -401,6 +401,6 @@ impl Drop for XlineServer {
     #[inline]
     fn drop(&mut self) {
         self.shutdown_trigger.notify(usize::MAX);
-        self.curp_shutdown_trigger.shutdown();
+        self.curp_shutdown_trigger.self_shutdown();
     }
 }

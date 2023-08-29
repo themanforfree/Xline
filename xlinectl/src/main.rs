@@ -214,6 +214,11 @@ fn cli() -> Command {
             .help_heading(GLOBAL_HEADING)
             .value_parser(value_parser!(u64))
             .default_value("50"))
+        .arg(arg!(--retry_count <TIMEOUT> "The count of Curp client retry times")
+            .global(true)
+            .help_heading(GLOBAL_HEADING)
+            .value_parser(value_parser!(usize))
+            .default_value("3"))
         .arg(arg!(--printer_type <TYPE> "The format of the result that will be printed")
             .global(true)
             .help_heading(GLOBAL_HEADING)
@@ -231,8 +236,9 @@ async fn main() -> Result<()> {
     let endpoints = matches.get_many::<String>("endpoints").expect("Required");
     let client_timeout_opt = ClientTimeout::new(
         Duration::from_secs(*matches.get_one("wait_synced_timeout").expect("Required")),
-        Duration::from_secs(*matches.get_one("wait_synced_timeout").expect("Required")),
-        Duration::from_millis(*matches.get_one("wait_synced_timeout").expect("Required")),
+        Duration::from_secs(*matches.get_one("propose_timeout").expect("Required")),
+        Duration::from_millis(*matches.get_one("retry_timeout").expect("Required")),
+        *matches.get_one("retry_count").expect("Required"),
     );
     let options = ClientOptions::new(user_opt, client_timeout_opt);
     let printer_type = match matches

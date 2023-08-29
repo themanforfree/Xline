@@ -11,7 +11,7 @@ use itertools::Itertools;
 use parking_lot::RwLock;
 use tokio::time::timeout;
 use tracing::{debug, instrument, warn};
-use utils::{config::ClientTimeout, parking_lot_lock::RwLockMap};
+use utils::config::ClientTimeout;
 
 use crate::{
     cmd::{Command, ProposeId},
@@ -306,10 +306,16 @@ where
     ) -> Result<(<C as Command>::ASR, <C as Command>::ER), CommandProposeError<C>> {
         debug!("slow round for cmd({}) started", cmd.id());
         let retry_timeout = *self.timeout.retry_timeout();
-        loop {
+        let retry_count = *self.timeout.retry_count();
+        for _ in 0..retry_count {
             // fetch leader id
-            let leader_id = self.get_leader_id().await;
-
+            let leader_id = match self.get_leader_id().await {
+                Ok(id) => id,
+                Err(e) => {
+                    warn!("failed to fetch leader, {e}");
+                    continue;
+                }
+            };
             debug!("wait synced request sent to {}", leader_id);
 
             let resp = match self
@@ -337,21 +343,13 @@ where
                     return Ok((asr, er));
                 }
                 SyncResult::Error(CommandSyncError::Shutdown) => {
-                    return Err(CommandProposeError::Propose(ProposeError::Shutdown));
+                    return Err(CommandProposeError::Shutdown);
                 }
                 SyncResult::Error(CommandSyncError::Sync(SyncError::Redirect(
                     new_leader,
                     term,
                 ))) => {
-                    let new_leader = new_leader.and_then(|id| {
-                        self.state.map_write(|mut state| {
-                            (state.term <= term).then(|| {
-                                state.leader = Some(id);
-                                state.term = term;
-                                id
-                            })
-                        })
-                    });
+                    self.state.write().check_and_update(new_leader, term);
                     self.resend_propose(Arc::clone(&cmd), new_leader).await?; // resend the propose to the new leader
                 }
                 SyncResult::Error(CommandSyncError::Sync(e)) => {
@@ -365,13 +363,21 @@ where
                 }
             }
         }
+        Err(CommandProposeError::Propose(ProposeError::Timeout))
     }
 
     /// The shutdown rpc of curp protocol
     #[instrument(skip_all)]
     pub async fn shutdown(&self, id: ProposeId) -> Result<(), ProposeError> {
-        loop {
-            let leader_id = self.get_leader_id().await;
+        let retry_count = *self.timeout.retry_count();
+        for _ in 0..retry_count {
+            let leader_id = match self.get_leader_id().await {
+                Ok(leader_id) => leader_id,
+                Err(e) => {
+                    warn!("failed to fetch leader, {e}");
+                    continue;
+                }
+            };
             debug!("shutdown request sent to {}", leader_id);
             let resp = match self
                 .get_connect(leader_id)
@@ -397,6 +403,7 @@ where
                 None => return Ok(()),
             }
         }
+        Err(ProposeError::Timeout)
     }
 
     /// Resend the propose only to the leader. This is used when leader changes and we need to ensure that the propose is received by the new leader.
@@ -405,13 +412,20 @@ where
         cmd: Arc<C>,
         mut new_leader: Option<ServerId>,
     ) -> Result<(), ProposeError> {
-        loop {
+        let retry_count = *self.timeout.retry_count();
+        for _ in 0..retry_count {
             tokio::time::sleep(*self.timeout.retry_timeout()).await;
 
             let leader_id = if let Some(id) = new_leader.take() {
                 id
             } else {
-                self.fetch_leader().await
+                match self.fetch_leader().await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        warn!("failed to fetch leader, {e}");
+                        continue;
+                    }
+                }
             };
             debug!("resend propose to {leader_id}");
 
@@ -445,14 +459,13 @@ where
 
             let mut state_w = self.state.write();
 
-            let resp_term = resp.term();
-            match state_w.term.cmp(&resp_term) {
+            match state_w.term.cmp(&resp.term) {
                 Ordering::Less => {
                     // reset term only when the resp has leader id to prevent:
                     // If a server loses contact with its leader, it will update its term for election. Since other servers are all right, the election will not succeed.
                     // But if the client learns about the new term and updates its term to it, it will never get the true leader.
                     if let Some(id) = resp.leader_id {
-                        state_w.update_to_term(resp_term);
+                        state_w.update_to_term(resp.term);
                         let done = id == leader_id;
                         state_w.set_leader(leader_id);
                         if done {
@@ -478,12 +491,14 @@ where
                 Ordering::Greater => {}
             }
         }
+        Err(ProposeError::Timeout)
     }
 
     /// Send fetch leader requests to all servers until there is a leader
     /// Note: The fetched leader may still be outdated
-    async fn fetch_leader(&self) -> ServerId {
-        loop {
+    async fn fetch_leader(&self) -> Result<ServerId, ProposeError> {
+        let retry_count = *self.timeout.retry_count();
+        for _ in 0..retry_count {
             let connects = self.all_connects();
             let mut rpcs: FuturesUnordered<_> = connects
                 .iter()
@@ -535,28 +550,33 @@ where
                 debug!("Fetch leader succeeded, leader set to {}", leader);
                 state.term = max_term;
                 state.set_leader(leader);
-                return leader;
+                return Ok(leader);
             }
 
             // wait until the election is completed
             // TODO: let user configure it according to average leader election cost
             tokio::time::sleep(*self.timeout.retry_timeout()).await;
         }
+        Err(ProposeError::Timeout)
     }
 
     /// Get leader id from the state or fetch it from servers
+    /// # Errors
+    /// `ProposeError::Timeout` if timeout
     #[inline]
-    pub async fn get_leader_id(&self) -> ServerId {
+    pub async fn get_leader_id(&self) -> Result<ServerId, ProposeError> {
         let notify = Arc::clone(&self.state.read().leader_notify);
         let retry_timeout = *self.timeout.retry_timeout();
-        loop {
+        let retry_count = *self.timeout.retry_count();
+        for _ in 0..retry_count {
             if let Some(id) = self.state.read().leader {
-                return id;
+                return Ok(id);
             }
             if timeout(retry_timeout, notify.listen()).await.is_err() {
-                break self.fetch_leader().await;
+                return self.fetch_leader().await;
             }
         }
+        Err(ProposeError::Timeout)
     }
 
     /// Propose the request to servers, if use_fast_path is false, it will wait for the synced index
@@ -620,8 +640,15 @@ where
     #[inline]
     pub async fn fetch_read_state(&self, cmd: &C) -> Result<ReadState, ProposeError> {
         let retry_timeout = *self.timeout.retry_timeout();
-        loop {
-            let leader_id = self.get_leader_id().await;
+        let retry_count = *self.timeout.retry_count();
+        for _ in 0..retry_count {
+            let leader_id = match self.get_leader_id().await {
+                Ok(id) => id,
+                Err(e) => {
+                    warn!("failed to fetch leader, {e}");
+                    continue;
+                }
+            };
             debug!("fetch read state request sent to {}", leader_id);
             let resp = match self
                 .get_connect(leader_id)
@@ -653,6 +680,7 @@ where
             };
             return Ok(state);
         }
+        Err(ProposeError::Timeout)
     }
 
     /// Fetch the current leader id and term from the curp server where is on the same node.
@@ -673,10 +701,12 @@ where
     }
 
     /// Fetch the current leader id without cache
+    /// # Errors
+    /// `ProposeError::Timeout` if timeout
     #[inline]
-    pub async fn get_leader_id_from_curp(&self) -> ServerId {
+    pub async fn get_leader_id_from_curp(&self) -> Result<ServerId, ProposeError> {
         if let Ok((Some(leader_id), _term)) = self.fetch_local_leader_info().await {
-            return leader_id;
+            return Ok(leader_id);
         }
         self.fetch_leader().await
     }

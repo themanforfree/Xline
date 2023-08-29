@@ -289,6 +289,13 @@ pub const fn default_retry_timeout() -> Duration {
     Duration::from_millis(50)
 }
 
+/// default retry count
+#[must_use]
+#[inline]
+pub const fn default_retry_count() -> usize {
+    3
+}
+
 /// default rpc timeout
 #[must_use]
 #[inline]
@@ -406,6 +413,11 @@ pub struct ClientTimeout {
     #[getset(get = "pub")]
     #[serde(with = "duration_format", default = "default_retry_timeout")]
     retry_timeout: Duration,
+
+    /// Curp client retry interval
+    #[getset(get = "pub")]
+    #[serde(default = "default_retry_count")]
+    retry_count: usize,
 }
 
 impl ClientTimeout {
@@ -416,11 +428,13 @@ impl ClientTimeout {
         wait_synced_timeout: Duration,
         propose_timeout: Duration,
         retry_timeout: Duration,
+        retry_count: usize,
     ) -> Self {
         Self {
             wait_synced_timeout,
             propose_timeout,
             retry_timeout,
+            retry_count,
         }
     }
 }
@@ -432,6 +446,7 @@ impl Default for ClientTimeout {
             wait_synced_timeout: default_client_wait_synced_timeout(),
             propose_timeout: default_propose_timeout(),
             retry_timeout: default_retry_timeout(),
+            retry_count: default_retry_count(),
         }
     }
 }
@@ -808,6 +823,7 @@ mod tests {
             default_client_wait_synced_timeout(),
             default_propose_timeout(),
             Duration::from_secs(5),
+            default_retry_count(),
         );
 
         let server_timeout = ServerTimeout::new(

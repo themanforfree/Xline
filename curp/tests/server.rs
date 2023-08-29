@@ -5,7 +5,7 @@ use std::{sync::Arc, time::Duration};
 use clippy_utilities::NumericCast;
 use curp::{
     client::Builder,
-    error::{CommandProposeError::Propose, ProposeError},
+    error::{CommandProposeError},
 };
 use curp_external_api::cmd::ProposeId;
 use curp_test_utils::{
@@ -268,18 +268,42 @@ async fn concurrent_cmd_order_should_have_correct_revision() {
 #[abort_on_panic]
 async fn shutdown_rpc_should_shutdown_the_cluster() {
     init_logger();
-    let group = CurpGroup::new(3).await;
+    let tmp_path = tempfile::TempDir::new().unwrap().into_path();
+    let group = CurpGroup::new_rocks(3, tmp_path.clone()).await;
+
+    let req_client = group.new_client(ClientTimeout::default()).await;
+    let collection_task = tokio::spawn(async move {
+        let mut collection = vec![];
+        for i in 0..50 {
+            let cmd = TestCommand::new_put(vec![i], i);
+            let res = req_client.propose(cmd, true).await;
+            if res.is_ok() {
+                collection.push(i);
+            }
+        }
+        collection
+    });
 
     let client = group.new_client(ClientTimeout::default()).await;
     let id = ProposeId::new(next_id().to_string());
     client.shutdown(id).await.unwrap();
 
     let res = client
-        .propose(TestCommand::new_put(vec![1], 1), false)
+        .propose(TestCommand::new_put(vec![888], 1), false)
         .await;
-    assert!(matches!(res, Err(Propose(ProposeError::Shutdown))));
+    println!("{:?}", res);
+    assert!(matches!(res, Err(CommandProposeError::Shutdown)));
 
-    sleep_secs(3).await;
-
+    let collection = collection_task.await.unwrap();
+    sleep_secs(1).await; // wait for the cluster to shutdown
     assert!(group.is_finished());
+
+    let group = CurpGroup::new_rocks(3, tmp_path).await;
+    let client = group.new_client(ClientTimeout::default()).await;
+    for i in collection {
+        let res = client.propose(TestCommand::new_get(vec![i]), true).await;
+        assert_eq!(res.unwrap().0 .values, vec![i]);
+    }
+
+    group.stop().await;
 }

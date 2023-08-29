@@ -154,12 +154,12 @@ use utils::{
         default_client_wait_synced_timeout, default_cmd_workers, default_compact_batch_size,
         default_compact_sleep_interval, default_follower_timeout_ticks, default_gc_interval,
         default_heartbeat_interval, default_log_entries_cap, default_log_level,
-        default_propose_timeout, default_range_retry_timeout, default_retry_timeout,
-        default_rotation, default_rpc_timeout, default_server_wait_synced_timeout,
-        default_sync_victims_interval, default_watch_progress_notify_interval, file_appender,
-        AuthConfig, AutoCompactConfig, ClientTimeout, ClusterConfig, CompactConfig,
-        CurpConfigBuilder, LevelConfig, LogConfig, RotationConfig, ServerTimeout, StorageConfig,
-        TraceConfig, XlineServerConfig,
+        default_propose_timeout, default_range_retry_timeout, default_retry_count,
+        default_retry_timeout, default_rotation, default_rpc_timeout,
+        default_server_wait_synced_timeout, default_sync_victims_interval,
+        default_watch_progress_notify_interval, file_appender, AuthConfig, AutoCompactConfig,
+        ClientTimeout, ClusterConfig, CompactConfig, CurpConfigBuilder, LevelConfig, LogConfig,
+        RotationConfig, ServerTimeout, StorageConfig, TraceConfig, XlineServerConfig,
     },
     parse_batch_bytes, parse_duration, parse_log_level, parse_members, parse_rotation,
     ConfigParseError,
@@ -215,6 +215,9 @@ struct ServerArgs {
     /// Curp propose retry timeout [default: 50ms]
     #[clap(long, value_parser = parse_duration)]
     retry_timeout: Option<Duration>,
+    /// Curp propose retry count [default: 3]
+    #[clap(long)]
+    retry_count: Option<usize>,
     /// Curp rpc timeout [default: 50ms]
     #[clap(long, value_parser = parse_duration)]
     rpc_timeout: Option<Duration>,
@@ -320,6 +323,7 @@ impl From<ServerArgs> for XlineServerConfig {
                 .unwrap_or_else(default_propose_timeout),
             args.client_retry_timeout
                 .unwrap_or_else(default_retry_timeout),
+            args.retry_count.unwrap_or_else(default_retry_count),
         );
 
         let server_timeout = ServerTimeout::new(

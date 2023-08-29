@@ -791,7 +791,7 @@ mod tests {
             l,
         ));
         sleep_secs(2).await;
-        let _r = t.shutdown();
+        t.self_shutdown();
     }
 
     #[traced_test]
@@ -836,6 +836,6 @@ mod tests {
         ));
         sleep_secs(3).await;
         assert!(curp.is_leader());
-        let _r = t.shutdown();
+        t.self_shutdown();
     }
 }
