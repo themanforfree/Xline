@@ -24,6 +24,8 @@ use crate::{
     snapshot::Snapshot,
 };
 
+use super::{ProposeConfChangeRequest, ProposeConfChangeResponse};
+
 /// Install snapshot chunk size: 64KB
 const SNAPSHOT_CHUNK_SIZE: u64 = 64 * 1024;
 
@@ -73,6 +75,13 @@ pub(crate) trait ConnectApi: Send + Sync + 'static {
         request: ProposeRequest,
         timeout: Duration,
     ) -> Result<tonic::Response<ProposeResponse>, RpcError>;
+
+    /// Send `ProposeRequest`
+    async fn propose_conf_change(
+        &self,
+        request: ProposeConfChangeRequest,
+        timeout: Duration,
+    ) -> Result<tonic::Response<ProposeConfChangeResponse>, RpcError>;
 
     /// Send `WaitSyncedRequest`
     async fn wait_synced(
@@ -170,6 +179,20 @@ impl ConnectApi for Connect {
         req.set_timeout(timeout);
         req.metadata_mut().inject_current();
         client.propose(req).await.map_err(Into::into)
+    }
+
+    /// Send `ProposeRequest`
+    #[instrument(skip(self), name = "client propose conf change")]
+    async fn propose_conf_change(
+        &self,
+        request: ProposeConfChangeRequest,
+        timeout: Duration,
+    ) -> Result<tonic::Response<ProposeConfChangeResponse>, RpcError> {
+        let mut client = self.get().await?;
+        let mut req = tonic::Request::new(request);
+        req.set_timeout(timeout);
+        req.metadata_mut().inject_current();
+        client.propose_conf_change(req).await.map_err(Into::into)
     }
 
     /// Send `WaitSyncedRequest`

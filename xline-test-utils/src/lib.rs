@@ -77,7 +77,7 @@ impl Cluster {
             let cluster_info = ClusterInfo::new(self.all_members.clone(), &name);
             tokio::spawn(async move {
                 let server = XlineServer::new(
-                    cluster_info.into(),
+                    cluster_info,
                     is_leader,
                     CurpConfig {
                         storage_cfg: StorageConfig::RocksDB(path.join("curp")),

@@ -5,19 +5,10 @@ use std::{
     hash::Hasher,
 };
 
+use crate::rpc::Member;
+
 /// Server Id
 pub type ServerId = u64;
-
-/// Cluster member
-#[derive(Debug, Clone)]
-pub struct Member {
-    /// Server id of the member
-    id: ServerId,
-    /// Name of the member
-    name: String,
-    /// Address of the member
-    address: String,
-}
 
 /// Cluster member
 impl Member {
@@ -27,7 +18,8 @@ impl Member {
         Self {
             id,
             name: name.into(),
-            address: address.into(),
+            addrs: address.into(),
+            is_learner: false,
         }
     }
 
@@ -40,7 +32,7 @@ impl Member {
 }
 
 /// cluster members information
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClusterInfo {
     /// cluster id
     cluster_id: u64,
@@ -64,7 +56,7 @@ impl ClusterInfo {
             if name == self_name {
                 member_id = id;
             }
-            let member = Member { id, name, address };
+            let member = Member::new(id, name, address);
             let _ig = members.insert(id, member);
         }
         debug_assert!(member_id != 0, "self_id should not be 0");
@@ -104,7 +96,7 @@ impl ClusterInfo {
         self.members
             .get_mut(id)
             .unwrap_or_else(|| unreachable!("member {} not found", id))
-            .address = address.into();
+            .addrs = address.into();
     }
 
     /// Get server address via server id
@@ -114,7 +106,7 @@ impl ClusterInfo {
         self.members
             .iter()
             .find(|t| t.id == id)
-            .map(|t| t.address.clone())
+            .map(|t| t.addrs.clone())
     }
 
     /// Get the current member
@@ -127,7 +119,7 @@ impl ClusterInfo {
     #[must_use]
     #[inline]
     pub fn self_address(&self) -> String {
-        self.self_member().address.clone()
+        self.self_member().addrs.clone()
     }
 
     /// Get the current server id
@@ -156,7 +148,13 @@ impl ClusterInfo {
     }
 
     /// Calculate the member id
-    fn calculate_member_id(address: &str, cluster_name: &str, timestamp: Option<u64>) -> ServerId {
+    #[inline]
+    #[must_use]
+    pub fn calculate_member_id(
+        address: &str,
+        cluster_name: &str,
+        timestamp: Option<u64>,
+    ) -> ServerId {
         let mut hasher = DefaultHasher::new();
         hasher.write(address.as_bytes());
         hasher.write(cluster_name.as_bytes());
@@ -196,7 +194,7 @@ impl ClusterInfo {
         self.members
             .iter()
             .filter(|t| t.id != self.member_id)
-            .map(|t| (t.id, t.address.clone()))
+            .map(|t| (t.id, t.addrs.clone()))
             .collect()
     }
 
@@ -206,8 +204,15 @@ impl ClusterInfo {
     pub fn all_members_addrs(&self) -> HashMap<ServerId, String> {
         self.members
             .iter()
-            .map(|t| (t.id, t.address.clone()))
+            .map(|t| (t.id, t.addrs.clone()))
             .collect()
+    }
+
+    /// Get all members
+    #[must_use]
+    #[inline]
+    pub fn members(&self) -> Vec<Member> {
+        self.members.iter().map(|t| t.value().clone()).collect()
     }
 
     /// Get length of peers

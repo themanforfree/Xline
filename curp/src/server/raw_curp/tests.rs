@@ -224,7 +224,7 @@ fn heartbeat_will_calibrate_next_index() {
 
     let st_r = curp.st.read();
     assert_eq!(st_r.term, 0);
-    assert_eq!(curp.lst.get_next_index(s1_id), 1);
+    assert!(curp.lst.get_next_index(s1_id).is_some_and(|n| n == 1));
 }
 
 #[traced_test]
@@ -639,7 +639,7 @@ fn add_exists_node() {
         "http://127.0.0.1:4567".to_owned(),
     )];
     let resp = curp.apply_conf_change(changes);
-    let error_match = matches!(resp, Err(ApplyConfChangeError::NodeAlreadyExists(_)));
+    let error_match = matches!(resp, Err(ConfChangeError::NodeAlreadyExists));
     assert!(error_match);
 }
 
@@ -679,7 +679,7 @@ fn remove_non_exists_node() {
     };
     let changes = vec![ConfChange::remove(1)];
     let resp = curp.apply_conf_change(changes);
-    assert!(matches!(resp, Err(ApplyConfChangeError::NodeNotExists(_))));
+    assert!(matches!(resp, Err(ConfChangeError::NodeNotExists)));
 }
 
 #[traced_test]
@@ -692,7 +692,7 @@ fn remove_node_less_than_3() {
     let follower_id = curp.cluster().get_id_by_name("S1").unwrap();
     let changes = vec![ConfChange::remove(follower_id)];
     let resp = curp.apply_conf_change(changes);
-    assert!(matches!(resp, Err(ApplyConfChangeError::InvalidConfig)));
+    assert!(matches!(resp, Err(ConfChangeError::InvalidConfig)));
 }
 
 #[traced_test]

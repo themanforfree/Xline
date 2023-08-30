@@ -18,6 +18,7 @@ use curp_test_utils::{
 use engine::{Engine, EngineType, Snapshot};
 use futures::future::join_all;
 use itertools::Itertools;
+use parking_lot::RwLock;
 use tokio::{net::TcpListener, runtime::Runtime, sync::mpsc};
 use tracing::debug;
 use utils::config::{ClientTimeout, CurpConfigBuilder, StorageConfig};

@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    ops::{Deref, DerefMut},
     sync::Arc,
 };
 
@@ -140,37 +141,38 @@ impl LeaderState {
     }
 
     /// Get status for a server
-    fn get_status(&self, id: ServerId) -> Ref<'_, u64, FollowerStatus> {
-        self.statuses
-            .get(&id)
-            .unwrap_or_else(|| unreachable!("no status for {id}"))
+    fn get_status(&self, id: ServerId) -> Option<Ref<'_, u64, FollowerStatus>> {
+        self.statuses.get(&id)
     }
 
     /// Get mutable status for a server
-    fn get_status_mut(&self, id: ServerId) -> RefMut<'_, u64, FollowerStatus> {
-        self.statuses
-            .get_mut(&id)
-            .unwrap_or_else(|| unreachable!("no status for {id}"))
+    fn get_status_mut(&self, id: ServerId) -> Option<RefMut<'_, u64, FollowerStatus>> {
+        self.statuses.get_mut(&id)
     }
 
     /// Get `next_index` for server
-    pub(super) fn get_next_index(&self, id: ServerId) -> LogIndex {
-        self.get_status(id).next_index
+    pub(super) fn get_next_index(&self, id: ServerId) -> Option<LogIndex> {
+        self.get_status(id).map(|s| s.next_index)
     }
 
     /// Get `match_index` for server
-    pub(super) fn get_match_index(&self, id: ServerId) -> LogIndex {
-        self.get_status(id).match_index
+    pub(super) fn get_match_index(&self, id: ServerId) -> Option<LogIndex> {
+        self.get_status(id).map(|s| s.match_index)
     }
 
     /// Update `next_index` for server
     pub(super) fn update_next_index(&self, id: ServerId, index: LogIndex) {
-        self.get_status_mut(id).next_index = index;
+        let Some(mut status) = self.get_status_mut(id) else {
+            return;
+        };
+        status.next_index = index;
     }
 
     /// Update `match_index` for server, will update `next_index` if possible
     pub(super) fn update_match_index(&self, id: ServerId, index: LogIndex) {
-        let mut status = self.get_status_mut(id);
+        let Some(mut status) = self.get_status_mut(id) else {
+            return;
+        };
 
         if status.match_index >= index {
             return;
@@ -214,7 +216,7 @@ pub(super) struct MajorityConfig {
 
 impl MajorityConfig {
     /// Create a new `MajorityConfig`
-    fn new(voters: impl Iterator<Item = ServerId>) -> Self {
+    pub(super) fn new(voters: impl Iterator<Item = ServerId>) -> Self {
         Self {
             voters: voters.collect(),
         }
@@ -241,8 +243,22 @@ impl MajorityConfig {
     }
 
     /// Get quorum: the smallest number of servers who must be online for the cluster to work
-    pub(super) fn quorum(&self) -> usize {
+    fn quorum(&self) -> usize {
         self.voters.len() / 2 + 1
+    }
+}
+
+impl Deref for MajorityConfig {
+    type Target = HashSet<ServerId>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.voters
+    }
+}
+
+impl DerefMut for MajorityConfig {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.voters
     }
 }
 

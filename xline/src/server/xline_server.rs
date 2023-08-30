@@ -77,7 +77,7 @@ impl XlineServer {
     #[inline]
     #[must_use]
     pub fn new(
-        cluster_info: Arc<ClusterInfo>,
+        cluster_info: ClusterInfo,
         is_leader: bool,
         curp_config: CurpConfig,
         client_timeout: ClientTimeout,
@@ -86,7 +86,7 @@ impl XlineServer {
         compact_config: CompactConfig,
     ) -> Self {
         Self {
-            cluster_info,
+            cluster_info: Arc::new(cluster_info),
             is_leader,
             curp_cfg: Arc::new(curp_config),
             client_timeout,
@@ -371,6 +371,7 @@ impl XlineServer {
                 Arc::clone(&client),
                 id_gen,
                 Arc::clone(&self.cluster_info),
+                self.cluster_info.self_name(),
             ),
             AuthServer::new(auth_storage, client, self.cluster_info.self_name()),
             WatchServer::new(

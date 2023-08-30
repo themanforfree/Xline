@@ -67,31 +67,32 @@ async fn cmd_worker<
     let id = curp.id();
     while let Ok(mut task) = dispatch_rx.recv().await {
         let succeeded = match task.take() {
-            TaskType::SpecExe(entry, pre_err) => {
-                match entry.entry_data {
-                    EntryData::Command(ref cmd) => {
-                        let er = if let Some(err_msg) = pre_err {
-                            Err(err_msg)
-                        } else {
-                            ce.execute(cmd, entry.index).await
-                        };
-                        let er_ok = er.is_ok();
-                        cb.write().insert_er(entry.id(), er);
-                        if !er_ok {
-                            sp.lock().remove(entry.id());
-                            let _ig = ucp.lock().remove(entry.id());
-                        }
-                        debug!(
-                            "{id} cmd({}) is speculatively executed, exe status: {er_ok}",
-                            entry.id()
-                        );
-                        er_ok
+            TaskType::SpecExe(entry, pre_err) => match entry.entry_data {
+                EntryData::Command(ref cmd) => {
+                    let er = if let Some(err_msg) = pre_err {
+                        Err(err_msg)
+                    } else {
+                        ce.execute(cmd, entry.index).await
+                    };
+                    let er_ok = er.is_ok();
+                    cb.write().insert_er(entry.id(), er);
+                    if !er_ok {
+                        sp.lock().remove(entry.id());
+                        let _ig = ucp.lock().remove(entry.id());
                     }
-                    EntryData::ConfChange(_) => false, // TODO: implement conf change
+                    debug!(
+                        "{id} cmd({}) is speculatively executed, exe status: {er_ok}",
+                        entry.id()
+                    );
+                    er_ok
                 }
-            }
+                EntryData::ConfChange(_) => true,
+            },
             TaskType::AS(entry, prepare) => match entry.entry_data {
                 EntryData::Command(ref cmd) => {
+                    let Some(prepare) = prepare else {
+                        unreachable!("prepare should always be Some(_) when entry is a command");
+                    };
                     let asr = ce.after_sync(cmd.as_ref(), entry.index, prepare).await;
                     let asr_ok = asr.is_ok();
                     cb.write().insert_asr(entry.id(), asr);
@@ -100,7 +101,12 @@ async fn cmd_worker<
                     debug!("{id} cmd({}) after sync is called", entry.id());
                     asr_ok
                 }
-                EntryData::ConfChange(_) => false, // TODO: implement conf change
+                EntryData::ConfChange(ref conf_change) => {
+                    let changes = conf_change.changes().to_owned();
+                    let res = curp.apply_conf_change(changes);
+                    cb.write().insert_conf(entry.id(), res);
+                    true
+                }
             },
             TaskType::Reset(snapshot, finish_tx) => {
                 if let Some(snapshot) = snapshot {

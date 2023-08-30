@@ -44,6 +44,8 @@ where
     id_gen: Arc<IdGenerator>,
     /// cluster information
     cluster_info: Arc<ClusterInfo>,
+    /// Name of the server
+    name: String,
 }
 
 impl<S> LeaseServer<S>
@@ -57,6 +59,7 @@ where
         client: Arc<Client<Command>>,
         id_gen: Arc<IdGenerator>,
         cluster_info: Arc<ClusterInfo>,
+        name: String,
     ) -> Arc<Self> {
         let lease_server = Arc::new(Self {
             lease_storage,
@@ -64,6 +67,7 @@ where
             client,
             id_gen,
             cluster_info,
+            name,
         });
         let _h = tokio::spawn(Self::revoke_expired_leases_task(Arc::clone(&lease_server)));
         lease_server
@@ -102,11 +106,7 @@ where
 
     /// Generate propose id
     fn generate_propose_id(&self) -> ProposeId {
-        ProposeId::new(format!(
-            "{}-{}",
-            self.cluster_info.self_name(),
-            Uuid::new_v4()
-        ))
+        ProposeId::new(format!("{}-{}", self.name, Uuid::new_v4()))
     }
 
     /// Propose request and get result with fast/slow path

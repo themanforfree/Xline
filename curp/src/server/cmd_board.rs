@@ -5,7 +5,10 @@ use indexmap::{IndexMap, IndexSet};
 use parking_lot::RwLock;
 use utils::parking_lot_lock::RwLockMap;
 
-use crate::cmd::{Command, ProposeId};
+use crate::{
+    cmd::{Command, ProposeId},
+    rpc::ConfChangeError,
+};
 
 /// Ref to the cmd board
 pub(super) type CmdBoardRef<C> = Arc<RwLock<CommandBoard<C>>>;
@@ -17,6 +20,10 @@ pub(super) struct CommandBoard<C: Command> {
     er_notifiers: HashMap<ProposeId, Event>,
     /// Store all notifiers for after sync results
     asr_notifiers: HashMap<ProposeId, Event>,
+    /// Store all notifiers for conf change results
+    conf_notifier: HashMap<ProposeId, Event>,
+    /// Store all conf change results
+    pub(super) conf_buffer: IndexMap<ProposeId, Result<bool, ConfChangeError>>,
     /// The cmd has been received before, this is used for dedup
     pub(super) sync: IndexSet<ProposeId>,
     /// Store all execution results
@@ -34,6 +41,8 @@ impl<C: Command> CommandBoard<C> {
             sync: IndexSet::new(),
             er_buffer: IndexMap::new(),
             asr_buffer: IndexMap::new(),
+            conf_notifier: HashMap::new(),
+            conf_buffer: IndexMap::new(),
         }
     }
 
@@ -80,6 +89,16 @@ impl<C: Command> CommandBoard<C> {
         self.notify_asr(id);
     }
 
+    /// Insert er to internal buffer
+    pub(super) fn insert_conf(&mut self, id: &ProposeId, conf_r: Result<bool, ConfChangeError>) {
+        assert!(
+            self.conf_buffer.insert(id.clone(), conf_r).is_none(),
+            "er should not be inserted twice"
+        );
+
+        self.notify_conf(id);
+    }
+
     /// Get a listener for execution result
     fn er_listener(&mut self, id: &ProposeId) -> EventListener {
         let event = self
@@ -106,6 +125,19 @@ impl<C: Command> CommandBoard<C> {
         listener
     }
 
+    /// Get a listener for conf change result
+    fn conf_listener(&mut self, id: &ProposeId) -> EventListener {
+        let event = self
+            .conf_notifier
+            .entry(id.clone())
+            .or_insert_with(Event::new);
+        let listener = event.listen();
+        if self.conf_buffer.contains_key(id) {
+            event.notify(usize::MAX);
+        }
+        listener
+    }
+
     /// Notify execution results
     fn notify_er(&mut self, id: &ProposeId) {
         if let Some(notifier) = self.er_notifiers.remove(id) {
@@ -116,6 +148,13 @@ impl<C: Command> CommandBoard<C> {
     /// Notify `wait_synced` requests
     fn notify_asr(&mut self, id: &ProposeId) {
         if let Some(notifier) = self.asr_notifiers.remove(id) {
+            notifier.notify(usize::MAX);
+        }
+    }
+
+    /// Notify `wait_synced` requests
+    fn notify_conf(&mut self, id: &ProposeId) {
+        if let Some(notifier) = self.conf_notifier.remove(id) {
             notifier.notify(usize::MAX);
         }
     }
@@ -149,6 +188,20 @@ impl<C: Command> CommandBoard<C> {
                 }
             }
             let listener = cb.write().asr_listener(id);
+            listener.await;
+        }
+    }
+
+    /// Wait for an execution result
+    pub(super) async fn wait_for_conf(
+        cb: &CmdBoardRef<C>,
+        id: &ProposeId,
+    ) -> Result<bool, ConfChangeError> {
+        loop {
+            if let Some(er) = cb.map_read(|cb_r| cb_r.conf_buffer.get(id).copied()) {
+                return er;
+            }
+            let listener = cb.write().conf_listener(id);
             listener.await;
         }
     }

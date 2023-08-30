@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use curp_external_api::cmd::{PbSerialize, PbSerializeError};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use self::proto::{cmd_result::Result as CmdResultInner, CmdResult};
 pub(crate) use self::proto::{
@@ -14,13 +14,17 @@ pub(crate) use self::proto::{
     wait_synced_response::{Success, SyncResult as SyncResultRaw},
     AppendEntriesRequest, AppendEntriesResponse, Empty, FetchClusterRequest, FetchClusterResponse,
     FetchReadStateRequest, FetchReadStateResponse, IdSet, InstallSnapshotRequest,
-    InstallSnapshotResponse, ProposeConfChangeRequest, ProposeConfChangeResponse,
+    InstallSnapshotResponse, Member, ProposeConfChangeRequest, ProposeConfChangeResponse,
     ProposeError as PbProposeErrorOuter, RedirectData, SyncError as PbSyncErrorOuter, VoteRequest,
     VoteResponse, WaitSyncedRequest, WaitSyncedResponse,
 };
 pub use self::proto::{
-    propose_response, protocol_client, protocol_server::ProtocolServer, FetchLeaderRequest,
-    FetchLeaderResponse, ProposeRequest, ProposeResponse,
+    propose_conf_change_request::{ConfChange, ConfChangeType},
+    propose_conf_change_response::ConfChangeError,
+    protocol_client,
+    protocol_server::ProtocolServer,
+    FetchLeaderRequest, FetchLeaderResponse, ProposeConfChangeRequest, ProposeConfChangeResponse,
+    ProposeRequest, ProposeResponse,
 };
 
 use crate::{
@@ -412,11 +416,12 @@ impl FetchReadStateResponse {
     }
 }
 
-#[allow(dead_code)] // TODO: remove
 #[allow(clippy::as_conversions)] // those conversions are safe
 impl ConfChange {
     /// Create a new `ConfChange` to add a node
-    pub(crate) fn add(node_id: ServerId, address: String) -> Self {
+    #[must_use]
+    #[inline]
+    pub fn add(node_id: ServerId, address: String) -> Self {
         Self {
             change_type: ConfChangeType::Add as i32,
             node_id,
@@ -425,7 +430,9 @@ impl ConfChange {
     }
 
     /// Create a new `ConfChange` to remove a node
-    pub(crate) fn remove(node_id: ServerId) -> Self {
+    #[must_use]
+    #[inline]
+    pub fn remove(node_id: ServerId) -> Self {
         Self {
             change_type: ConfChangeType::Remove as i32,
             node_id,
@@ -434,7 +441,9 @@ impl ConfChange {
     }
 
     /// Create a new `ConfChange` to update a node
-    pub(crate) fn update(node_id: ServerId, address: String) -> Self {
+    #[must_use]
+    #[inline]
+    pub fn update(node_id: ServerId, address: String) -> Self {
         Self {
             change_type: ConfChangeType::Update as i32,
             node_id,
@@ -443,11 +452,59 @@ impl ConfChange {
     }
 
     /// Create a new `ConfChange` to add a learner node
-    pub(crate) fn add_learner(node_id: ServerId, address: String) -> Self {
+    #[must_use]
+    #[inline]
+    pub fn add_learner(node_id: ServerId, address: String) -> Self {
         Self {
             change_type: ConfChangeType::AddLearner as i32,
             node_id,
             address,
+        }
+    }
+}
+
+impl ProposeConfChangeRequest {
+    /// Create a new `ProposeConfChangeRequest`
+    #[inline]
+    #[must_use]
+    pub fn new(id: String, changes: Vec<ConfChange>) -> Self {
+        Self { id, changes }
+    }
+
+    /// Get id of the request
+    #[inline]
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+/// Conf change data in log entry
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct ConfChangeEntry {
+    /// Propose id
+    id: ProposeId,
+    /// Conf changes
+    changes: Vec<ConfChange>,
+}
+
+impl ConfChangeEntry {
+    /// Get id of the entry
+    pub(crate) fn id(&self) -> &ProposeId {
+        &self.id
+    }
+
+    /// Get changes of the entry
+    pub(crate) fn changes(&self) -> &[ConfChange] {
+        &self.changes
+    }
+}
+
+impl From<ProposeConfChangeRequest> for ConfChangeEntry {
+    fn from(req: ProposeConfChangeRequest) -> Self {
+        Self {
+            id: ProposeId::new(req.id),
+            changes: req.changes,
         }
     }
 }

@@ -21,10 +21,11 @@ use crate::{
     members::ServerId,
     rpc::{
         self, connect::ConnectApi, protocol_client::ProtocolClient, FetchClusterRequest,
-        FetchClusterResponse, FetchLeaderRequest, FetchReadStateRequest, ProposeRequest,
-        ReadState as PbReadState, SyncResult, WaitSyncedRequest,
+        FetchClusterResponse, FetchLeaderRequest, FetchReadStateRequest, Member,
+        ProposeConfChangeRequest, ProposeRequest, ReadState as PbReadState, SyncResult,
+        WaitSyncedRequest,
     },
-    LogIndex,
+    ConfChangeError, LogIndex,
 };
 
 /// Protocol client
@@ -563,6 +564,48 @@ where
                 Ok((asr, er)) => Ok((er, Some(asr))),
                 Err(e) => Err(e),
             }
+        }
+    }
+
+    /// Propose the conf change request to servers
+    #[instrument(skip_all)]
+    pub async fn propose_conf_change(
+        &self,
+        conf_change: ProposeConfChangeRequest,
+    ) -> Result<Result<Vec<Member>, ConfChangeError>, CommandProposeError<C>> {
+        debug!(
+            "propose_conf_change with propose_id({}) started",
+            conf_change.id()
+        );
+        let retry_timeout = *self.timeout.retry_timeout();
+        loop {
+            // TODO: Only retry a limited number of times
+            // fetch leader id
+            let leader_id = self.get_leader_id().await;
+
+            debug!("propose_conf_change request sent to {}", leader_id);
+
+            let resp = match self
+                .get_connect(leader_id)
+                .unwrap_or_else(|| unreachable!("leader {leader_id} not found"))
+                .propose_conf_change(conf_change.clone(), *self.timeout.wait_synced_timeout())
+                .await
+            {
+                Ok(resp) => resp.into_inner(),
+                Err(e) => {
+                    warn!("wait synced rpc error: {e}");
+                    tokio::time::sleep(retry_timeout).await;
+                    continue;
+                }
+            };
+            break match resp.error {
+                Some(e) => {
+                    let error = ConfChangeError::from_i32(e)
+                        .unwrap_or_else(|| unreachable!("error code from rpc must be valid"));
+                    Ok(Err(error))
+                }
+                None => Ok(Ok(resp.members)),
+            };
         }
     }
 
