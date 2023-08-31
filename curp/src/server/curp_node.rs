@@ -372,7 +372,9 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
                         debug!("sync follower daemon exits");
                         return;
                     }
-                    _ = leader_event.listen() => {}
+                    _ = leader_event.listen() => {
+                        shutdown_trigger.mark_sync_daemon_shutdown();
+                    }
                 }
             }
             let futs = connects.iter().map(|(id, connect)| {

@@ -11,7 +11,7 @@ use itertools::Itertools;
 use parking_lot::RwLock;
 use tokio::time::timeout;
 use tracing::{debug, instrument, warn};
-use utils::config::ClientTimeout;
+use utils::config::ClientConfig;
 
 use crate::{
     cmd::{Command, ProposeId},
@@ -40,8 +40,8 @@ pub struct Client<C: Command> {
     /// All servers's `Connect`
     #[builder(setter(skip))]
     connects: DashMap<ServerId, Arc<dyn ConnectApi>>,
-    /// Curp client timeout settings
-    timeout: ClientTimeout,
+    /// Curp client config settings
+    config: ClientConfig,
     /// To keep Command type
     #[builder(setter(skip))]
     phantom: PhantomData<C>,
@@ -63,14 +63,14 @@ impl<C: Command> Builder<C> {
         &self,
         all_members: HashMap<ServerId, String>,
     ) -> Result<Client<C>, ClientBuildError> {
-        let Some(timeout) = self.timeout else {
+        let Some(config) = self.config else {
             return Err(ClientBuildError::invalid_arguments("timeout is required"));
         };
         let connects = rpc::connect(all_members).await.collect();
         let client = Client::<C> {
             local_server_id: self.local_server_id,
             state: RwLock::new(State::new(None, 0)),
-            timeout,
+            config,
             connects,
             phantom: PhantomData,
         };
@@ -118,17 +118,17 @@ impl<C: Command> Builder<C> {
         &self,
         addrs: Vec<String>,
     ) -> Result<Client<C>, ClientBuildError> {
-        let Some(timeout) = self.timeout else {
+        let Some(config) = self.config else {
             return Err(ClientBuildError::invalid_arguments("timeout is required"));
         };
         let res = self
-            .fetch_cluster(addrs.clone(), *timeout.propose_timeout())
+            .fetch_cluster(addrs.clone(), *config.propose_timeout())
             .await?;
         let connects = rpc::connect(res.all_members).await.collect();
         let client = Client::<C> {
             local_server_id: self.local_server_id,
             state: RwLock::new(State::new(res.leader_id, res.term)),
-            timeout,
+            config,
             connects,
             phantom: PhantomData,
         };
@@ -141,7 +141,7 @@ impl<C: Command> Debug for Client<C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Client")
             .field("state", &self.state)
-            .field("timeout", &self.timeout)
+            .field("timeout", &self.config)
             .finish()
     }
 }
@@ -250,7 +250,7 @@ where
             .iter()
             .zip(iter::repeat(req))
             .map(|(connect, req_cloned)| {
-                connect.propose(req_cloned, *self.timeout.propose_timeout())
+                connect.propose(req_cloned, *self.config.propose_timeout())
             })
             .collect();
 
@@ -305,8 +305,8 @@ where
         cmd: Arc<C>,
     ) -> Result<(<C as Command>::ASR, <C as Command>::ER), CommandProposeError<C>> {
         debug!("slow round for cmd({}) started", cmd.id());
-        let retry_timeout = *self.timeout.retry_timeout();
-        let retry_count = *self.timeout.retry_count();
+        let retry_timeout = *self.config.retry_timeout();
+        let retry_count = *self.config.retry_count();
         for _ in 0..retry_count {
             // fetch leader id
             let leader_id = match self.get_leader_id().await {
@@ -323,7 +323,7 @@ where
                 .unwrap_or_else(|| unreachable!("leader {leader_id} not found"))
                 .wait_synced(
                     WaitSyncedRequest::new(cmd.id()).map_err(Into::<ProposeError>::into)?,
-                    *self.timeout.wait_synced_timeout(),
+                    *self.config.wait_synced_timeout(),
                 )
                 .await
             {
@@ -343,7 +343,7 @@ where
                     return Ok((asr, er));
                 }
                 SyncResult::Error(CommandSyncError::Shutdown) => {
-                    return Err(CommandProposeError::Shutdown);
+                    return Err(CommandProposeError::Propose(ProposeError::Shutdown));
                 }
                 SyncResult::Error(CommandSyncError::Sync(SyncError::Redirect(
                     new_leader,
@@ -369,7 +369,7 @@ where
     /// The shutdown rpc of curp protocol
     #[instrument(skip_all)]
     pub async fn shutdown(&self, id: ProposeId) -> Result<(), ProposeError> {
-        let retry_count = *self.timeout.retry_count();
+        let retry_count = *self.config.retry_count();
         for _ in 0..retry_count {
             let leader_id = match self.get_leader_id().await {
                 Ok(leader_id) => leader_id,
@@ -384,14 +384,14 @@ where
                 .unwrap_or_else(|| unreachable!("leader {leader_id} not found"))
                 .shutdown(
                     ShutdownRequest::new(id.clone()),
-                    *self.timeout.wait_synced_timeout(),
+                    *self.config.wait_synced_timeout(),
                 )
                 .await
             {
                 Ok(resp) => resp.into_inner(),
                 Err(e) => {
                     warn!("shutdown rpc error: {e}");
-                    tokio::time::sleep(*self.timeout.retry_timeout()).await;
+                    tokio::time::sleep(*self.config.retry_timeout()).await;
                     continue;
                 }
             };
@@ -412,9 +412,9 @@ where
         cmd: Arc<C>,
         mut new_leader: Option<ServerId>,
     ) -> Result<(), ProposeError> {
-        let retry_count = *self.timeout.retry_count();
+        let retry_count = *self.config.retry_count();
         for _ in 0..retry_count {
-            tokio::time::sleep(*self.timeout.retry_timeout()).await;
+            tokio::time::sleep(*self.config.retry_timeout()).await;
 
             let leader_id = if let Some(id) = new_leader.take() {
                 id
@@ -434,7 +434,7 @@ where
                 .unwrap_or_else(|| unreachable!("leader {leader_id} not found"))
                 .propose(
                     ProposeRequest::new(cmd.as_ref()),
-                    *self.timeout.propose_timeout(),
+                    *self.config.propose_timeout(),
                 )
                 .await;
 
@@ -452,7 +452,7 @@ where
                 Err(e) => {
                     // if the propose fails again, need to fetch the leader and try again
                     warn!("failed to resend propose, {e}");
-                    tokio::time::sleep(*self.timeout.retry_timeout()).await;
+                    tokio::time::sleep(*self.config.retry_timeout()).await;
                     continue;
                 }
             };
@@ -497,7 +497,7 @@ where
     /// Send fetch leader requests to all servers until there is a leader
     /// Note: The fetched leader may still be outdated
     async fn fetch_leader(&self) -> Result<ServerId, ProposeError> {
-        let retry_count = *self.timeout.retry_count();
+        let retry_count = *self.config.retry_count();
         for _ in 0..retry_count {
             let connects = self.all_connects();
             let mut rpcs: FuturesUnordered<_> = connects
@@ -506,7 +506,7 @@ where
                     (
                         connect.id(),
                         connect
-                            .fetch_leader(FetchLeaderRequest::new(), *self.timeout.retry_timeout())
+                            .fetch_leader(FetchLeaderRequest::new(), *self.config.retry_timeout())
                             .await,
                     )
                 })
@@ -555,7 +555,7 @@ where
 
             // wait until the election is completed
             // TODO: let user configure it according to average leader election cost
-            tokio::time::sleep(*self.timeout.retry_timeout()).await;
+            tokio::time::sleep(*self.config.retry_timeout()).await;
         }
         Err(ProposeError::Timeout)
     }
@@ -566,8 +566,8 @@ where
     #[inline]
     pub async fn get_leader_id(&self) -> Result<ServerId, ProposeError> {
         let notify = Arc::clone(&self.state.read().leader_notify);
-        let retry_timeout = *self.timeout.retry_timeout();
-        let retry_count = *self.timeout.retry_count();
+        let retry_timeout = *self.config.retry_timeout();
+        let retry_count = *self.config.retry_count();
         for _ in 0..retry_count {
             if let Some(id) = self.state.read().leader {
                 return Ok(id);
@@ -639,8 +639,8 @@ where
     ///   `ProposeError::EncodingError` encoding error met while deserializing the propose id
     #[inline]
     pub async fn fetch_read_state(&self, cmd: &C) -> Result<ReadState, ProposeError> {
-        let retry_timeout = *self.timeout.retry_timeout();
-        let retry_count = *self.timeout.retry_count();
+        let retry_timeout = *self.config.retry_timeout();
+        let retry_count = *self.config.retry_count();
         for _ in 0..retry_count {
             let leader_id = match self.get_leader_id().await {
                 Ok(id) => id,
@@ -655,7 +655,7 @@ where
                 .unwrap_or_else(|| unreachable!("leader {leader_id} not found"))
                 .fetch_read_state(
                     FetchReadStateRequest::new(cmd)?,
-                    *self.timeout.wait_synced_timeout(),
+                    *self.config.wait_synced_timeout(),
                 )
                 .await
             {
@@ -691,7 +691,7 @@ where
             let resp = self
                 .get_connect(local_server)
                 .unwrap_or_else(|| unreachable!("self id {} not found", local_server))
-                .fetch_leader(FetchLeaderRequest::new(), *self.timeout.retry_timeout())
+                .fetch_leader(FetchLeaderRequest::new(), *self.config.retry_timeout())
                 .await?
                 .into_inner();
             Ok((resp.leader_id, resp.term))
@@ -752,7 +752,7 @@ mod tests {
     #[tokio::test]
     async fn client_builder_should_return_err_when_arguments_invalid() {
         let res = Client::<TestCommand>::builder()
-            .timeout(ClientTimeout::default())
+            .config(ClientConfig::default())
             .build_from_all_members(HashMap::from([(123, "addr".to_owned())]))
             .await;
         assert!(res.is_ok());

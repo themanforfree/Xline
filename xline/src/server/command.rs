@@ -739,6 +739,8 @@ pub(super) fn propose_err_to_status(err: CommandProposeError<Command>) -> tonic:
         CommandProposeError::Propose(ProposeError::SyncedError(e)) => {
             tonic::Status::unknown(e.to_string())
         }
+        CommandProposeError::Propose(ProposeError::Timeout) => tonic::Status::internal("timeout"),
+
         _ => unreachable!("propose err {err:?}"),
     }
 }

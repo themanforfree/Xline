@@ -88,10 +88,10 @@ pub struct ClusterConfig {
     #[getset(get = "pub")]
     #[serde(default = "CurpConfig::default")]
     curp_config: CurpConfig,
-    /// Curp client timeout settings
+    /// Curp client config settings
     #[getset(get = "pub")]
-    #[serde(default = "ClientTimeout::default")]
-    client_timeout: ClientTimeout,
+    #[serde(default = "ClientConfig::default")]
+    client_config: ClientConfig,
     /// Xline server timeout settings
     #[getset(get = "pub")]
     #[serde(default = "ServerTimeout::default")]
@@ -107,7 +107,7 @@ impl ClusterConfig {
         members: HashMap<String, String>,
         is_leader: bool,
         curp: CurpConfig,
-        client_timeout: ClientTimeout,
+        client_config: ClientConfig,
         server_timeout: ServerTimeout,
     ) -> Self {
         Self {
@@ -115,7 +115,7 @@ impl ClusterConfig {
             members,
             is_leader,
             curp_config: curp,
-            client_timeout,
+            client_config,
             server_timeout,
         }
     }
@@ -201,6 +201,11 @@ pub struct CurpConfig {
     #[builder(default = "default_retry_timeout()")]
     #[serde(with = "duration_format", default = "default_retry_timeout")]
     pub retry_timeout: Duration,
+
+    /// Curp propose retry count
+    #[builder(default = "default_retry_count()")]
+    #[serde(default = "default_retry_count")]
+    pub retry_count: usize,
 
     /// Curp rpc timeout
     #[builder(default = "default_rpc_timeout()")]
@@ -380,6 +385,7 @@ impl Default for CurpConfig {
             heartbeat_interval: default_heartbeat_interval(),
             wait_synced_timeout: default_server_wait_synced_timeout(),
             retry_timeout: default_retry_timeout(),
+            retry_count: default_retry_count(),
             rpc_timeout: default_rpc_timeout(),
             batch_timeout: default_batch_timeout(),
             batch_max_size: default_batch_max_size(),
@@ -395,7 +401,8 @@ impl Default for CurpConfig {
 
 /// Curp client settings
 #[derive(Copy, Clone, Debug, Deserialize, PartialEq, Eq, Getters)]
-pub struct ClientTimeout {
+#[allow(clippy::module_name_repetitions)]
+pub struct ClientConfig {
     /// Curp client wait sync timeout
     #[getset(get = "pub")]
     #[serde(
@@ -420,7 +427,7 @@ pub struct ClientTimeout {
     retry_count: usize,
 }
 
-impl ClientTimeout {
+impl ClientConfig {
     /// Create a new client timeout
     #[must_use]
     #[inline]
@@ -439,7 +446,7 @@ impl ClientTimeout {
     }
 }
 
-impl Default for ClientTimeout {
+impl Default for ClientConfig {
     #[inline]
     fn default() -> Self {
         Self {
@@ -782,7 +789,7 @@ mod tests {
             rpc_timeout = '100ms'
             retry_timeout = '100ms'
 
-            [cluster.client_timeout]
+            [cluster.client_config]
             retry_timeout = '5s'
 
             [storage]
@@ -819,7 +826,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let client_timeout = ClientTimeout::new(
+        let client_config = ClientConfig::new(
             default_client_wait_synced_timeout(),
             default_propose_timeout(),
             Duration::from_secs(5),
@@ -843,7 +850,7 @@ mod tests {
                 ]),
                 true,
                 curp_config,
-                client_timeout,
+                client_config,
                 server_timeout
             )
         );
@@ -927,7 +934,7 @@ mod tests {
                 ]),
                 true,
                 CurpConfigBuilder::default().build().unwrap(),
-                ClientTimeout::default(),
+                ClientConfig::default(),
                 ServerTimeout::default()
             )
         );

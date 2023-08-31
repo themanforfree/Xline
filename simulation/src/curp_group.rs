@@ -20,7 +20,7 @@ use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use tracing::debug;
 use utils::{
-    config::{ClientTimeout, CurpConfigBuilder, StorageConfig},
+    config::{ClientConfig, CurpConfigBuilder, StorageConfig},
     shutdown,
 };
 
@@ -154,7 +154,7 @@ impl CurpGroup {
         &self.nodes[id]
     }
 
-    pub async fn new_client(&self, timeout: ClientTimeout) -> SimClient<TestCommand> {
+    pub async fn new_client(&self, config: ClientConfig) -> SimClient<TestCommand> {
         let all_members = self
             .nodes
             .iter()
@@ -163,7 +163,7 @@ impl CurpGroup {
         SimClient {
             inner: Arc::new(
                 Client::<TestCommand>::builder()
-                    .timeout(timeout)
+                    .config(config)
                     .build_from_all_members(all_members)
                     .await
                     .unwrap(),

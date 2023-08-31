@@ -29,7 +29,7 @@ use tokio::{
 };
 use tracing::debug;
 use utils::{
-    config::{ClientTimeout, CurpConfigBuilder, StorageConfig},
+    config::{ClientConfig, CurpConfigBuilder, StorageConfig},
     shutdown::{self, Trigger},
 };
 
@@ -55,9 +55,8 @@ pub(crate) struct RocksSnapshotAllocator;
 #[async_trait]
 impl SnapshotAllocator for RocksSnapshotAllocator {
     async fn allocate_new_snapshot(&self) -> Result<Snapshot, Box<dyn Error>> {
-        let tmp_path = format!("/tmp/snapshot-{}", uuid::Uuid::new_v4());
         Ok(Snapshot::new_for_receiving(EngineType::Rocks(
-            tmp_path.into(),
+            tempfile::TempDir::new()?.into_path(),
         ))?)
     }
 }
@@ -179,9 +178,9 @@ impl CurpGroup {
         &self.nodes[id]
     }
 
-    pub async fn new_client(&self, timeout: ClientTimeout) -> Client<TestCommand> {
+    pub async fn new_client(&self, config: ClientConfig) -> Client<TestCommand> {
         Client::builder()
-            .timeout(timeout)
+            .config(config)
             .build_from_addrs(self.all.values().cloned().collect_vec())
             .await
             .unwrap()

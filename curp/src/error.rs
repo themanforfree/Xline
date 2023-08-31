@@ -187,9 +187,6 @@ impl From<bincode::Error> for ProposeError {
 #[allow(clippy::module_name_repetitions)] // this-error generate code false-positive
 #[non_exhaustive]
 pub enum CommandProposeError<C: Command> {
-    /// Cluster already shutdown
-    #[error("cluster shutdown")]
-    Shutdown,
     /// Curp propose error
     #[error("propose error: {0:?}")]
     Propose(#[from] ProposeError),

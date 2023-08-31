@@ -158,7 +158,7 @@ use utils::{
         default_retry_timeout, default_rotation, default_rpc_timeout,
         default_server_wait_synced_timeout, default_sync_victims_interval,
         default_watch_progress_notify_interval, file_appender, AuthConfig, AutoCompactConfig,
-        ClientTimeout, ClusterConfig, CompactConfig, CurpConfigBuilder, LevelConfig, LogConfig,
+        ClientConfig, ClusterConfig, CompactConfig, CurpConfigBuilder, LevelConfig, LogConfig,
         RotationConfig, ServerTimeout, StorageConfig, TraceConfig, XlineServerConfig,
     },
     parse_batch_bytes, parse_duration, parse_log_level, parse_members, parse_rotation,
@@ -306,6 +306,7 @@ impl From<ServerArgs> for XlineServerConfig {
         .wait_synced_timeout(args.server_wait_synced_timeout
             .unwrap_or_else(default_server_wait_synced_timeout))
         .retry_timeout(args.retry_timeout.unwrap_or_else(default_retry_timeout))
+        .retry_count(args.retry_count.unwrap_or_else(default_retry_count))
         .rpc_timeout(args.rpc_timeout.unwrap_or_else(default_rpc_timeout))
         .batch_timeout(args.batch_timeout.unwrap_or_else(default_batch_timeout))
         .batch_max_size(args.batch_max_size.unwrap_or_else(default_batch_max_size))
@@ -316,7 +317,7 @@ impl From<ServerArgs> for XlineServerConfig {
         .cmd_workers(args.cmd_workers)
         .build() else { panic!("failed to create curp config") };
 
-        let client_timeout = ClientTimeout::new(
+        let client_config = ClientConfig::new(
             args.client_wait_synced_timeout
                 .unwrap_or_else(default_client_wait_synced_timeout),
             args.client_propose_timeout
@@ -339,7 +340,7 @@ impl From<ServerArgs> for XlineServerConfig {
             args.members,
             args.is_leader,
             curp_config,
-            client_timeout,
+            client_config,
             server_timeout,
         );
         let log = LogConfig::new(args.log_file, args.log_rotate, args.log_level);
@@ -527,7 +528,7 @@ async fn main() -> Result<()> {
         cluster_info.into(),
         *cluster_config.is_leader(),
         cluster_config.curp_config().clone(),
-        *cluster_config.client_timeout(),
+        *cluster_config.client_config(),
         *cluster_config.server_timeout(),
         config.storage().clone(),
         *config.compact(),

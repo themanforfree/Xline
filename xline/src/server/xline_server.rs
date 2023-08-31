@@ -11,7 +11,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use tonic_health::ServingStatus;
 use utils::{
-    config::{ClientTimeout, CompactConfig, CurpConfig, ServerTimeout, StorageConfig},
+    config::{ClientConfig, CompactConfig, CurpConfig, ServerTimeout, StorageConfig},
     shutdown,
 };
 
@@ -60,8 +60,8 @@ pub struct XlineServer {
     is_leader: bool,
     /// Curp server timeout
     curp_cfg: Arc<CurpConfig>,
-    /// Client timeout
-    client_timeout: ClientTimeout,
+    /// Client config
+    client_config: ClientConfig,
     /// Storage config,
     storage_cfg: StorageConfig,
     /// Compact config
@@ -86,7 +86,7 @@ impl XlineServer {
         cluster_info: Arc<ClusterInfo>,
         is_leader: bool,
         curp_config: CurpConfig,
-        client_timeout: ClientTimeout,
+        client_config: ClientConfig,
         server_timeout: ServerTimeout,
         storage_config: StorageConfig,
         compact_config: CompactConfig,
@@ -96,7 +96,7 @@ impl XlineServer {
             cluster_info,
             is_leader,
             curp_cfg: Arc::new(curp_config),
-            client_timeout,
+            client_config,
             storage_cfg: storage_config,
             compact_cfg: compact_config,
             server_timeout,
@@ -325,7 +325,7 @@ impl XlineServer {
         let client = Arc::new(
             CurpClient::builder()
                 .local_server_id(self.cluster_info.self_id())
-                .timeout(self.client_timeout)
+                .config(self.client_config)
                 .build_from_all_members(self.cluster_info.all_members())
                 .await?,
         );

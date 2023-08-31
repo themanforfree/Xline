@@ -71,6 +71,15 @@ impl Trigger {
             .store(true, Ordering::Relaxed);
     }
 
+    /// Reset sync daemon shutdown.
+    #[inline]
+    pub fn reset_sync_daemon_shutdown(&self) {
+        debug!("reset sync followers daemon shutdown");
+        self.inner
+            .sync_follower_daemon_shutdown
+            .store(false, Ordering::Relaxed);
+    }
+
     /// Check if the mpsc channel and sync follower daemon has been shutdown.
     /// and send the shutdown signal when both are shutdown.
     #[inline]
