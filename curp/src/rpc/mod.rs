@@ -6,7 +6,6 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use self::proto::{cmd_result::Result as CmdResultInner, CmdResult};
 pub(crate) use self::proto::{
     fetch_read_state_response::ReadState,
-    propose_conf_change_request::{ConfChange, ConfChangeType},
     propose_error::ProposeError as PbProposeError,
     propose_response::ExeResult,
     protocol_server::Protocol,
@@ -14,9 +13,9 @@ pub(crate) use self::proto::{
     wait_synced_response::{Success, SyncResult as SyncResultRaw},
     AppendEntriesRequest, AppendEntriesResponse, Empty, FetchClusterRequest, FetchClusterResponse,
     FetchReadStateRequest, FetchReadStateResponse, IdSet, InstallSnapshotRequest,
-    InstallSnapshotResponse, Member, ProposeConfChangeRequest, ProposeConfChangeResponse,
-    ProposeError as PbProposeErrorOuter, RedirectData, SyncError as PbSyncErrorOuter, VoteRequest,
-    VoteResponse, WaitSyncedRequest, WaitSyncedResponse,
+    InstallSnapshotResponse, Member, ProposeError as PbProposeErrorOuter, RedirectData,
+    SyncError as PbSyncErrorOuter, VoteRequest, VoteResponse, WaitSyncedRequest,
+    WaitSyncedResponse,
 };
 pub use self::proto::{
     propose_conf_change_request::{ConfChange, ConfChangeType},

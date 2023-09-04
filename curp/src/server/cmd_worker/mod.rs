@@ -103,7 +103,7 @@ async fn cmd_worker<
                 }
                 EntryData::ConfChange(ref conf_change) => {
                     let changes = conf_change.changes().to_owned();
-                    let res = curp.apply_conf_change(changes);
+                    let res = curp.apply_conf_change(changes).await;
                     cb.write().insert_conf(entry.id(), res);
                     true
                 }

@@ -13,6 +13,7 @@ use tokio::time::timeout;
 use tracing::{debug, instrument, warn};
 use utils::{config::ClientTimeout, parking_lot_lock::RwLockMap};
 
+use crate::rpc::connect::ConnectApiWrapper;
 use crate::{
     cmd::{Command, ProposeId},
     error::{
@@ -40,7 +41,7 @@ pub struct Client<C: Command> {
     state: RwLock<State>,
     /// All servers's `Connect`
     #[builder(setter(skip))]
-    connects: DashMap<ServerId, Arc<dyn ConnectApi>>,
+    connects: DashMap<ServerId, ConnectApiWrapper>,
     /// Curp client timeout settings
     timeout: ClientTimeout,
     /// To keep Command type
@@ -689,7 +690,7 @@ where
 
 /// Get the superquorum for curp protocol
 /// Although curp can proceed with f + 1 available replicas, it needs f + 1 + (f + 1)/2 replicas
-/// (for superquorum of witenesses) to use 1 RTT operations. With less than superquorum replicas,
+/// (for superquorum of witnesses) to use 1 RTT operations. With less than superquorum replicas,
 /// clients must ask masters to commit operations in f + 1 replicas before returning result.(2 RTTs).
 #[inline]
 fn superquorum(nodes: usize) -> usize {

@@ -1,3 +1,5 @@
+use std::fmt::Formatter;
+use std::ops::Deref;
 use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
 
 use async_stream::stream;
@@ -32,7 +34,7 @@ const SNAPSHOT_CHUNK_SIZE: u64 = 64 * 1024;
 /// Convert a vec of addr string to a vec of `Connect`
 pub(crate) async fn connect(
     addrs: HashMap<ServerId, String>,
-) -> impl Iterator<Item = (ServerId, Arc<dyn ConnectApi>)> {
+) -> impl Iterator<Item = (ServerId, ConnectApiWrapper)> {
     futures::future::join_all(addrs.into_iter().map(|(id, mut addr)| async move {
         // Addrs must start with "http" to communicate with the server
         if !addr.starts_with("http://") {
@@ -48,11 +50,11 @@ pub(crate) async fn connect(
     .into_iter()
     .map(|(id, addr, conn)| {
         debug!("successfully establish connection with {addr}");
-        let connect: Arc<dyn ConnectApi> = Arc::new(Connect {
+        let connect = ConnectApiWrapper::new_from_arc(Arc::new(Connect {
             id,
             rpc_connect: RwLock::new(conn),
             addr,
-        });
+        }));
         (id, connect)
     })
 }
@@ -127,6 +129,43 @@ pub(crate) trait ConnectApi: Send + Sync + 'static {
     ) -> Result<tonic::Response<FetchReadStateResponse>, RpcError>;
 }
 
+/// Connect Api Wrapper
+/// The solution of [rustc bug](https://github.com/dtolnay/async-trait/issues/141#issuecomment-767978616)
+#[derive(Clone)]
+pub(crate) struct ConnectApiWrapper(Arc<dyn ConnectApi>);
+
+impl ConnectApiWrapper {
+    /// Create a new `ConnectApiWrapper` from `id` and `addr`
+    pub(crate) async fn new(id: ServerId, addr: String) -> Self {
+        let connect = Connect::new(id, addr).await;
+        Self::new_from_arc(Arc::new(connect))
+    }
+
+    /// Create a new `ConnectApiWrapper` from `Arc<dyn ConnectApi>`
+    pub(crate) fn new_from_arc(connect: Arc<dyn ConnectApi>) -> Self {
+        Self(connect)
+    }
+
+    /// Converts `self` into inner `Arc<dyn ConnectApi>`
+    pub(crate) fn into_inner(self) -> Arc<dyn ConnectApi> {
+        self.0
+    }
+}
+
+impl Debug for ConnectApiWrapper {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectApiWrapper").finish()
+    }
+}
+
+impl Deref for ConnectApiWrapper {
+    type Target = Arc<dyn ConnectApi>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// The connection struct to hold the real rpc connections, it may failed to connect, but it also
 /// retries the next time
 #[derive(Debug)]
@@ -137,6 +176,22 @@ pub(crate) struct Connect {
     rpc_connect: RwLock<Result<ProtocolClient<tonic::transport::Channel>, tonic::transport::Error>>,
     /// The addr used to connect if failing met
     addr: String,
+}
+
+impl Connect {
+    /// Create a new `Connect`
+    pub(crate) async fn new(id: ServerId, addr: String) -> Self {
+        let addr = if addr.starts_with("http://") {
+            addr
+        } else {
+            format!("http://{addr}")
+        };
+        Self {
+            id,
+            rpc_connect: RwLock::new(ProtocolClient::connect(addr.clone()).await),
+            addr,
+        }
+    }
 }
 
 #[async_trait]

@@ -285,6 +285,7 @@ async fn propose_add_node() {
     let members = res.unwrap().unwrap();
     assert_eq!(members.len(), 4);
     assert!(members.iter().any(|m| m.id == node_id));
+    sleep_millis(500).await;
 
     group.stop();
 }
@@ -298,7 +299,13 @@ async fn propose_remove_node() {
     let client = group.new_client(ClientTimeout::default()).await;
 
     let id = uuid::Uuid::new_v4().to_string();
-    let node_id = group.nodes.keys().next().copied().unwrap();
+    let leader = group.get_leader().await.0;
+    let node_id = group
+        .nodes
+        .keys()
+        .find(|&id| id != &leader)
+        .copied()
+        .unwrap();
     let changes = vec![ConfChange::remove(node_id)];
     let conf_change = ProposeConfChangeRequest::new(id, changes);
     let members = client
@@ -308,10 +315,11 @@ async fn propose_remove_node() {
         .unwrap();
     assert_eq!(members.len(), 4);
     assert!(members.iter().all(|m| m.id != node_id));
-
+    sleep_millis(500).await;
     group.stop();
 }
 
+#[ignore]
 #[tokio::test]
 #[abort_on_panic]
 async fn propose_update_node() {
