@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt::Debug, io, sync::Arc, time::Duration};
 
 use clippy_utilities::NumericCast;
 use curp_external_api::cmd::{PbSerializeError, ProposeId};
-use engine::SnapshotApi;
+use engine::{SnapshotAllocator, SnapshotApi};
 use event_listener::Event;
 use futures::{pin_mut, stream::FuturesUnordered, Stream, StreamExt};
 use madsim::rand::{thread_rng, Rng};
@@ -41,7 +41,6 @@ use crate::{
     },
     server::{cmd_worker::CEEventTxApi, raw_curp::SyncAction, storage::db::DB},
     snapshot::{Snapshot, SnapshotMeta},
-    SnapshotAllocator,
 };
 
 /// Curp error
@@ -373,7 +372,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
                         return;
                     }
                     _ = leader_event.listen() => {
-                        shutdown_trigger.mark_sync_daemon_shutdown();
+                        shutdown_trigger.reset_sync_daemon_shutdown();
                     }
                 }
             }

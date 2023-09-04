@@ -2,7 +2,8 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use clippy_utilities::{Cast, OverflowArithmetic};
-use curp::{client::Client, members::ClusterInfo, server::Rpc, ProtocolServer, SnapshotAllocator};
+use curp::{client::Client, members::ClusterInfo, server::Rpc, ProtocolServer};
+use engine::{MemorySnapshotAllocator, RocksSnapshotAllocator, SnapshotAllocator};
 use event_listener::Event;
 use futures::Future;
 use jsonwebtoken::{DecodingKey, EncodingKey};
@@ -39,7 +40,6 @@ use crate::{
         index::Index,
         kvwatcher::KvWatcher,
         lease_store::LeaseCollection,
-        snapshot_allocator::{MemorySnapshotAllocator, RocksSnapshotAllocator},
         storage_api::StorageApi,
         AuthStore, KvStore, LeaseStore,
     },
@@ -316,8 +316,8 @@ impl XlineServer {
             header_gen.auth_revision_arc(),
         );
         let snapshot_allocator: Box<dyn SnapshotAllocator> = match self.storage_cfg {
-            StorageConfig::Memory => Box::new(MemorySnapshotAllocator),
-            StorageConfig::RocksDB(_) => Box::new(RocksSnapshotAllocator),
+            StorageConfig::Memory => Box::<MemorySnapshotAllocator>::default(),
+            StorageConfig::RocksDB(_) => Box::<RocksSnapshotAllocator>::default(),
             #[allow(clippy::unimplemented)]
             _ => unimplemented!(),
         };

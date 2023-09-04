@@ -7,13 +7,13 @@ use curp::{
     error::{CommandProposeError, ProposeError},
     members::{ClusterInfo, ServerId},
     server::Rpc,
-    FetchLeaderRequest, FetchLeaderResponse, LogIndex, SnapshotAllocator,
+    FetchLeaderRequest, FetchLeaderResponse, LogIndex,
 };
 use curp_test_utils::{
     test_cmd::{TestCE, TestCommand, TestCommandResult},
     TestRoleChange, TestRoleChangeInner,
 };
-use engine::{Engine, EngineType, Snapshot};
+use engine::{Engine, EngineType, Snapshot, SnapshotAllocator};
 use itertools::Itertools;
 use madsim::runtime::NodeHandle;
 use parking_lot::Mutex;
@@ -317,7 +317,9 @@ impl CurpGroup {
     pub fn disable_node(&self, id: ServerId) {
         let handle = madsim::runtime::Handle::current();
         let net = madsim::net::NetSim::current();
-        let Some(node)  = handle.get_node(id.to_string()) else { panic!("no node with name {id} in the simulator")};
+        let Some(node) = handle.get_node(id.to_string()) else {
+            panic!("no node with name {id} in the simulator")
+        };
         net.clog_node(node.id());
     }
 
@@ -325,7 +327,9 @@ impl CurpGroup {
     pub fn enable_node(&self, id: ServerId) {
         let handle = madsim::runtime::Handle::current();
         let net = madsim::net::NetSim::current();
-        let Some(node)  = handle.get_node(id.to_string()) else { panic!("no node with name {id} the simulator")};
+        let Some(node) = handle.get_node(id.to_string()) else {
+            panic!("no node with name {id} the simulator")
+        };
         net.unclog_node(node.id());
     }
 

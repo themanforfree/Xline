@@ -10,7 +10,7 @@ use curp::{
     error::ServerError,
     members::{ClusterInfo, ServerId},
     server::Rpc,
-    LogIndex, SnapshotAllocator,
+    LogIndex,
 };
 use curp_external_api::cmd::ProposeId;
 use curp_test_utils::{
@@ -18,7 +18,10 @@ use curp_test_utils::{
     test_cmd::{next_id, TestCE, TestCommand, TestCommandResult},
     TestRoleChange, TestRoleChangeInner,
 };
-use engine::{Engine, EngineType, Snapshot};
+use engine::{
+    Engine, EngineType, MemorySnapshotAllocator, RocksSnapshotAllocator, Snapshot,
+    SnapshotAllocator,
+};
 use futures::future::join_all;
 use itertools::Itertools;
 use tokio::{
@@ -39,27 +42,6 @@ pub mod proto {
 pub use proto::{protocol_client::ProtocolClient, ProposeRequest, ProposeResponse};
 
 use self::proto::{FetchLeaderRequest, FetchLeaderResponse};
-
-struct MemorySnapshotAllocator;
-
-#[async_trait]
-impl SnapshotAllocator for MemorySnapshotAllocator {
-    async fn allocate_new_snapshot(&self) -> Result<Snapshot, Box<dyn Error>> {
-        Ok(Snapshot::new_for_receiving(EngineType::Memory)?)
-    }
-}
-
-/// Rocks snapshot allocator
-pub(crate) struct RocksSnapshotAllocator;
-
-#[async_trait]
-impl SnapshotAllocator for RocksSnapshotAllocator {
-    async fn allocate_new_snapshot(&self) -> Result<Snapshot, Box<dyn Error>> {
-        Ok(Snapshot::new_for_receiving(EngineType::Rocks(
-            tempfile::TempDir::new()?.into_path(),
-        ))?)
-    }
-}
 
 pub struct CurpNode {
     pub id: ServerId,
@@ -113,13 +95,14 @@ impl CurpGroup {
                             (
                                 StorageConfig::RocksDB(storage_path.join("curp")),
                                 StorageConfig::RocksDB(storage_path.join("xline")),
-                                Box::new(RocksSnapshotAllocator) as Box<dyn SnapshotAllocator>,
+                                Box::<RocksSnapshotAllocator>::default()
+                                    as Box<dyn SnapshotAllocator>,
                             )
                         }
                         None => (
                             StorageConfig::Memory,
                             StorageConfig::Memory,
-                            Box::new(MemorySnapshotAllocator) as Box<dyn SnapshotAllocator>,
+                            Box::<MemorySnapshotAllocator>::default() as Box<dyn SnapshotAllocator>,
                         ),
                     };
 

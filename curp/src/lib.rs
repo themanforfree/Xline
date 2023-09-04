@@ -163,7 +163,6 @@ pub use rpc::{
     propose_response, protocol_client, FetchLeaderRequest, FetchLeaderResponse, ProposeRequest,
     ProposeResponse,
 };
-pub use snapshot::SnapshotAllocator;
 
 /// Client side, sending requests and determining requests' state
 pub mod client;

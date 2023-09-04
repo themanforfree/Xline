@@ -704,11 +704,13 @@ where
     /// # Errors
     /// `ProposeError::Timeout` if timeout
     #[inline]
-    pub async fn get_leader_id_from_curp(&self) -> Result<ServerId, ProposeError> {
+    pub async fn get_leader_id_from_curp(&self) -> Result<ServerId, CommandProposeError<C>> {
         if let Ok((Some(leader_id), _term)) = self.fetch_local_leader_info().await {
             return Ok(leader_id);
         }
-        self.fetch_leader().await
+        self.fetch_leader()
+            .await
+            .map_err(|e| CommandProposeError::Propose(e))
     }
 
     /// Get the connect by server id

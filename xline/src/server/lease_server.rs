@@ -234,7 +234,7 @@ where
                 .client
                 .get_leader_id_from_curp()
                 .await
-                .map_err(|e| tonic::Status::internal(format!("Get leader id error: {e}")))?;
+                .map_err(propose_err_to_status)?;
             // Given that a candidate server may become a leader when it won the election or
             // a follower when it lost the election. Therefore we need to double check here.
             // We can directly invoke leader_keep_alive when a candidate becomes a leader.
@@ -332,7 +332,7 @@ where
                 .client
                 .get_leader_id_from_curp()
                 .await
-                .map_err(|e| tonic::Status::internal(format!("Get leader id error: {e}")))?;
+                .map_err(propose_err_to_status)?;
             let leader_addr = self.cluster_info.address(leader_id).unwrap_or_else(|| {
                 unreachable!(
                     "The address of leader {} not found in all_members {:?}",
