@@ -54,7 +54,6 @@ pub struct CurpNode {
 }
 
 pub struct CurpGroup {
-    pub shutdown_trigger: watch::Sender<bool>,
     pub nodes: HashMap<ServerId, CurpNode>,
     pub all: HashMap<ServerId, String>,
     pub storage_path: Option<PathBuf>,

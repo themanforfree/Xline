@@ -859,8 +859,7 @@ mod test {
     use std::time::Duration;
 
     use test_macros::abort_on_panic;
-    use tokio::sync::watch;
-    use utils::config::StorageConfig;
+    use utils::{config::StorageConfig, shutdown};
 
     use super::*;
     use crate::{
@@ -887,7 +886,7 @@ mod test {
 
     async fn init_store(
         db: Arc<DB>,
-        shutdown_listener: watch::Receiver<bool>,
+        shutdown_listener: shutdown::Listener,
     ) -> Result<(Arc<KvStore<DB>>, RevisionNumberGenerator), ExecuteError> {
         let store = init_empty_store(db, shutdown_listener);
         let keys = vec!["a", "b", "c", "d", "e", "z", "z", "z"];
@@ -907,7 +906,7 @@ mod test {
         Ok((store, revision))
     }
 
-    fn init_empty_store(db: Arc<DB>, shutdown_listener: watch::Receiver<bool>) -> Arc<KvStore<DB>> {
+    fn init_empty_store(db: Arc<DB>, shutdown_listener: shutdown::Listener) -> Arc<KvStore<DB>> {
         let (compact_tx, compact_rx) = mpsc::channel(COMPACT_CHANNEL_SIZE);
         let (kv_update_tx, kv_update_rx) = mpsc::channel(CHANNEL_SIZE);
         let lease_collection = Arc::new(LeaseCollection::new(0));
@@ -961,7 +960,7 @@ mod test {
     #[tokio::test]
     #[abort_on_panic]
     async fn test_keys_only() -> Result<(), ExecuteError> {
-        let (tx, rx) = watch::channel(false);
+        let (tx, rx) = shutdown::channel();
         let db = DB::open(&StorageConfig::Memory)?;
         let (store, _rev) = init_store(db, rx).await?;
 
@@ -976,15 +975,14 @@ mod test {
         for kv in response.kvs {
             assert!(kv.value.is_empty());
         }
-        let _r = tx.send(true);
-        tx.closed().await;
+        tx.self_shutdown_and_wait().await;
         Ok(())
     }
 
     #[tokio::test]
     #[abort_on_panic]
     async fn test_range_empty() -> Result<(), ExecuteError> {
-        let (tx, rx) = watch::channel(false);
+        let (tx, rx) = shutdown::channel();
         let db = DB::open(&StorageConfig::Memory)?;
         let (store, _rev) = init_store(db, rx).await?;
 
@@ -997,15 +995,14 @@ mod test {
         let response = store.handle_range_request(&request)?;
         assert_eq!(response.kvs.len(), 0);
         assert_eq!(response.count, 0);
-        let _r = tx.send(true);
-        tx.closed().await;
+        tx.self_shutdown_and_wait().await;
         Ok(())
     }
 
     #[tokio::test]
     #[abort_on_panic]
     async fn test_range_filter() -> Result<(), ExecuteError> {
-        let (tx, rx) = watch::channel(false);
+        let (tx, rx) = shutdown::channel();
         let db = DB::open(&StorageConfig::Memory)?;
         let (store, _rev) = init_store(db, rx).await?;
 
@@ -1023,15 +1020,14 @@ mod test {
         assert_eq!(response.kvs.len(), 2);
         assert_eq!(response.kvs[0].create_revision, 2);
         assert_eq!(response.kvs[1].create_revision, 3);
-        let _r = tx.send(true);
-        tx.closed().await;
+        tx.self_shutdown_and_wait().await;
         Ok(())
     }
 
     #[tokio::test]
     #[abort_on_panic]
     async fn test_range_sort() -> Result<(), ExecuteError> {
-        let (tx, rx) = watch::channel(false);
+        let (tx, rx) = shutdown::channel();
         let db = DB::open(&StorageConfig::Memory)?;
         let (store, _rev) = init_store(db, rx).await?;
         let keys = ["a", "b", "c", "d", "e", "z"];
@@ -1084,15 +1080,14 @@ mod test {
                 );
             }
         }
-        let _r = tx.send(true);
-        tx.closed().await;
+        tx.self_shutdown_and_wait().await;
         Ok(())
     }
 
     #[tokio::test]
     #[abort_on_panic]
     async fn test_recover() -> Result<(), ExecuteError> {
-        let (tx, rx) = watch::channel(false);
+        let (tx, rx) = shutdown::channel();
         let db = DB::open(&StorageConfig::Memory)?;
         let ops = vec![WriteOp::PutCompactRevision(8)];
         db.flush_ops(ops)?;
@@ -1118,15 +1113,14 @@ mod test {
         assert_eq!(new_store.compacted_revision(), 8);
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert_eq!(new_store.index.get_from_rev(b"z", b"", 5).len(), 2);
-        let _r = tx.send(true);
-        tx.closed().await;
+        tx.self_shutdown_and_wait().await;
         Ok(())
     }
 
     #[tokio::test]
     #[abort_on_panic]
     async fn test_txn() -> Result<(), ExecuteError> {
-        let (tx, rx) = watch::channel(false);
+        let (tx, rx) = shutdown::channel();
         let txn_req = RequestWithToken::new(
             TxnRequest {
                 compare: vec![Compare {
@@ -1177,15 +1171,14 @@ mod test {
         assert_eq!(response.count, 1);
         assert_eq!(response.kvs.len(), 1);
         assert_eq!(response.kvs[0].value, "1".as_bytes());
-        let _r = tx.send(true);
-        tx.closed().await;
+        tx.self_shutdown_and_wait().await;
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]
     #[abort_on_panic]
     async fn test_kv_store_index_available() {
-        let (tx, rx) = watch::channel(false);
+        let (tx, rx) = shutdown::channel();
         let db = DB::open(&StorageConfig::Memory).unwrap();
         let (store, revision) = init_store(Arc::clone(&db), rx).await.unwrap();
         let handle = tokio::spawn({
@@ -1215,13 +1208,12 @@ mod test {
             "kvs.len() != revs.len(), maybe some operations already inserted into index, but not flushed to db"
         );
         handle.await.unwrap();
-        let _r = tx.send(true);
-        tx.closed().await;
+        tx.self_shutdown_and_wait().await;
     }
 
     #[tokio::test]
     async fn test_compaction() -> Result<(), ExecuteError> {
-        let (tx, rx) = watch::channel(false);
+        let (tx, rx) = shutdown::channel();
         let db = DB::open(&StorageConfig::Memory)?;
         let store = init_empty_store(db, rx);
         let revision = RevisionNumberGenerator::default();
@@ -1316,8 +1308,7 @@ mod test {
             store.get_range(b"a", b"", 5).unwrap().is_empty(),
             "(a, 4) should be removed"
         );
-        let _r = tx.send(true);
-        tx.closed().await;
+        tx.self_shutdown_and_wait().await;
         Ok(())
     }
 

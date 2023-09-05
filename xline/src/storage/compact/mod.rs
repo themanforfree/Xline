@@ -9,11 +9,9 @@ use curp::{
 use event_listener::Event;
 use periodic_compactor::PeriodicCompactor;
 use revision_compactor::RevisionCompactor;
-use tokio::{
-    sync::{mpsc::Receiver, watch},
-    time::sleep,
-};
+use tokio::{sync::mpsc::Receiver, time::sleep};
 use utils::config::AutoCompactConfig;
+use utils::shutdown;
 use uuid::Uuid;
 
 use super::{
@@ -84,18 +82,22 @@ pub(crate) async fn auto_compactor(
     is_leader: bool,
     client: Arc<Client<Command>>,
     revision_getter: Arc<RevisionNumberGenerator>,
-    shutdown_trigger: Arc<Event>,
+    shutdown_listener: shutdown::Listener,
     auto_compact_cfg: AutoCompactConfig,
 ) -> Arc<dyn Compactor> {
     let auto_compactor: Arc<dyn Compactor> = match auto_compact_cfg {
-        AutoCompactConfig::Periodic(period) => {
-            PeriodicCompactor::new_arc(is_leader, client, revision_getter, shutdown_trigger, period)
-        }
+        AutoCompactConfig::Periodic(period) => PeriodicCompactor::new_arc(
+            is_leader,
+            client,
+            revision_getter,
+            shutdown_listener,
+            period,
+        ),
         AutoCompactConfig::Revision(retention) => RevisionCompactor::new_arc(
             is_leader,
             client,
             revision_getter,
-            shutdown_trigger,
+            shutdown_listener,
             retention,
         ),
         _ => {
@@ -110,13 +112,14 @@ pub(crate) async fn auto_compactor(
 }
 
 /// background compact executor
+#[allow(clippy::integer_arithmetic)] // introduced bt tokio::select! macro
 pub(crate) async fn compact_bg_task<DB>(
     kv_store: Arc<KvStore<DB>>,
     index: Arc<Index>,
     batch_limit: usize,
     interval: Duration,
     mut compact_task_rx: Receiver<(i64, Option<Arc<Event>>)>,
-    mut shutdown_listener: watch::Receiver<bool>,
+    mut shutdown_listener: shutdown::Listener,
 ) where
     DB: StorageApi,
 {
@@ -129,7 +132,7 @@ pub(crate) async fn compact_bg_task<DB>(
                     break;
                 }
             }
-            _ = shutdown_listener.changed() => {
+            _ = shutdown_listener.wait_self_shutdown() => {
                 break;
             }
         };

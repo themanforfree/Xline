@@ -13,14 +13,11 @@ use itertools::Itertools;
 use log::warn;
 use parking_lot::RwLock;
 use tokio::{
-    sync::{
-        mpsc::{self, error::TrySendError},
-        watch,
-    },
+    sync::mpsc::{self, error::TrySendError},
     time::sleep,
 };
 use tracing::debug;
-use utils::parking_lot_lock::RwLockMap;
+use utils::{parking_lot_lock::RwLockMap, shutdown};
 
 use super::storage_api::StorageApi;
 use crate::{
@@ -397,7 +394,7 @@ where
         storage: Arc<KvStore<S>>,
         kv_update_rx: mpsc::Receiver<(i64, Vec<Event>)>,
         sync_victims_interval: Duration,
-        shutdown_listener: watch::Receiver<bool>,
+        shutdown_listener: shutdown::Listener,
     ) -> Arc<Self> {
         let watcher_map = Arc::new(RwLock::new(WatcherMap::new()));
         let kv_watcher = Arc::new(Self {
@@ -422,11 +419,11 @@ where
     async fn kv_updates_task(
         kv_watcher: Arc<KvWatcher<S>>,
         mut kv_update_rx: mpsc::Receiver<(i64, Vec<Event>)>,
-        mut shutdown_listener: watch::Receiver<bool>,
+        mut shutdown_listener: shutdown::Listener,
     ) {
         loop {
             tokio::select! {
-                _ = shutdown_listener.changed() => {
+                _ = shutdown_listener.wait_self_shutdown() => {
                     debug!("kv_updates_task shutdown");
                     break;
                 }
@@ -446,7 +443,7 @@ where
     async fn sync_victims_task(
         kv_watcher: Arc<KvWatcher<S>>,
         sync_victims_interval: Duration,
-        mut shutdown_listener: watch::Receiver<bool>,
+        mut shutdown_listener: shutdown::Listener,
     ) {
         loop {
             let victims = kv_watcher
@@ -498,7 +495,7 @@ where
                 kv_watcher.watcher_map.write().victims.extend(new_victims);
             }
             tokio::select! {
-                _ = shutdown_listener.changed() => {
+                _ = shutdown_listener.wait_self_shutdown() => {
                     debug!("sync_victims_task shutdown");
                     break;
                 }
@@ -615,9 +612,7 @@ mod test {
         },
     };
 
-    fn init_empty_store(
-        rx: watch::Receiver<bool>,
-    ) -> (Arc<KvStore<DB>>, Arc<DB>, Arc<KvWatcher<DB>>) {
+    fn init_empty_store(rx: shutdown::Listener) -> (Arc<KvStore<DB>>, Arc<DB>, Arc<KvWatcher<DB>>) {
         let (compact_tx, _compact_rx) = mpsc::channel(COMPACT_CHANNEL_SIZE);
         let db = DB::open(&StorageConfig::Memory).unwrap();
         let header_gen = Arc::new(HeaderGenerator::new(0, 0));
@@ -641,7 +636,7 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     #[abort_on_panic]
     async fn watch_should_not_lost_events() {
-        let (tx, rx) = watch::channel(false);
+        let (tx, rx) = shutdown::channel();
         let (store, db, kv_watcher) = init_empty_store(rx);
         let mut map = BTreeMap::new();
         let (event_tx, mut event_rx) = mpsc::channel(128);
@@ -691,14 +686,13 @@ mod test {
             assert_eq!(count, 1, "key {k} should be notified once");
         }
         handle.abort();
-        let _r = tx.send(true);
-        tx.closed().await;
+        tx.self_shutdown_and_wait().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
     #[abort_on_panic]
     async fn test_victim() {
-        let (tx, rx) = watch::channel(false);
+        let (tx, rx) = shutdown::channel();
         let (store, db, kv_watcher) = init_empty_store(rx);
         // response channel with capacity 1, so it will be full easily, then we can trigger victim
         let (event_tx, mut event_rx) = mpsc::channel(1);
@@ -731,14 +725,13 @@ mod test {
             put(store.as_ref(), db.as_ref(), "foo", vec![i], i.cast()).await;
         }
         handle.await.unwrap();
-        let _r = tx.send(true);
-        tx.closed().await;
+        tx.self_shutdown_and_wait().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
     #[abort_on_panic]
     async fn test_cancel_watcher() {
-        let (tx, rx) = watch::channel(false);
+        let (tx, rx) = shutdown::channel();
         let (_store, _db, kv_watcher) = init_empty_store(rx);
         let (event_tx, _event_rx) = mpsc::channel(1);
         let stop_notify = Arc::new(event_listener::Event::new());
@@ -755,8 +748,7 @@ mod test {
         kv_watcher.cancel(1);
         assert!(kv_watcher.watcher_map.read().index.is_empty());
         assert!(kv_watcher.watcher_map.read().watchers.is_empty());
-        let _r = tx.send(true);
-        tx.closed().await;
+        tx.self_shutdown_and_wait().await;
     }
 
     async fn put(

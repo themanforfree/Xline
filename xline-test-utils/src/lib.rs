@@ -84,11 +84,8 @@ impl Cluster {
                     StorageConfig::Memory,
                     CompactConfig::default(),
                 );
-                let signal = async {
-                    let _ = rx.recv().await;
-                };
                 let result = server
-                    .start_from_listener_shutdown(listener, signal, db, Self::test_key_pair())
+                    .start_from_listener(listener, db, Self::test_key_pair())
                     .await;
                 if let Err(e) = result {
                     panic!("Server start error: {e}");
@@ -122,6 +119,13 @@ impl Cluster {
 
     pub fn addrs(&self) -> Vec<String> {
         self.all_members.values().cloned().collect()
+    }
+
+    pub async fn stop(&mut self) {
+        futures::future::join_all(self.servers.iter_mut().map(|s| s.stop())).await;
+        for path in &self.paths {
+            let _ignore = tokio::fs::remove_dir_all(path).await;
+        }
     }
 
     fn test_key_pair() -> Option<(EncodingKey, DecodingKey)> {

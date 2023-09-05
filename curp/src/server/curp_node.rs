@@ -9,7 +9,7 @@ use madsim::rand::{thread_rng, Rng};
 use parking_lot::{Mutex, RwLock};
 use thiserror::Error;
 use tokio::{
-    sync::{broadcast, mpsc, watch},
+    sync::{broadcast, mpsc},
     time::MissedTickBehavior,
 };
 use tracing::{debug, error, info, warn};

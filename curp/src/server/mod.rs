@@ -4,7 +4,7 @@ use engine::SnapshotAllocator;
 use futures::TryStreamExt;
 #[cfg(not(madsim))]
 use tokio::net::TcpListener;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::broadcast;
 #[cfg(not(madsim))]
 use tokio_stream::wrappers::TcpListenerStream;
 #[cfg(not(madsim))]

@@ -9,7 +9,7 @@ use std::{
     sync::Arc,
 };
 
-use tokio::sync::{oneshot, watch};
+use tokio::sync::oneshot;
 use tracing::{debug, error};
 use utils::shutdown::{self, Signal};
 
@@ -516,20 +516,6 @@ impl<C: Command, CE: CommandExecutor<C>> Filter<C, CE> {
             }
         };
         self.update_graph(vid);
-    }
-
-    /// Check whether the channel can be shutdown
-    fn check_shutdown(&self) -> bool {
-        self.vs.iter().all(|(_, v)| {
-            matches!(
-                v.inner,
-                VertexInner::Cmd {
-                    exe_st: ExeState::Executed(_),
-                    as_st: AsState::NotSynced(_),
-                    ..
-                }
-            )
-        })
     }
 }
 

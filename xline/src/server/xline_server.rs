@@ -5,10 +5,7 @@ use clippy_utilities::{Cast, OverflowArithmetic};
 use curp::{client::Client, members::ClusterInfo, server::Rpc, ProtocolServer};
 use engine::{MemorySnapshotAllocator, RocksSnapshotAllocator, SnapshotAllocator};
 use jsonwebtoken::{DecodingKey, EncodingKey};
-use tokio::{
-    net::TcpListener,
-    sync::{mpsc::channel, watch},
-};
+use tokio::{net::TcpListener, sync::mpsc::channel};
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use tonic_health::ServingStatus;
@@ -205,7 +202,7 @@ impl XlineServer {
     ) -> Result<()> {
         let mut shutdown_listener = self.shutdown_trigger.subscribe();
         let signal = async move {
-            let _r = shutdown_listener.changed().await;
+            let _r = shutdown_listener.wait_self_shutdown().await;
         };
         let (
             kv_server,
@@ -250,7 +247,7 @@ impl XlineServer {
     ) -> Result<()> {
         let mut shutdown_listener = self.shutdown_trigger.subscribe();
         let signal = async move {
-            let _r = shutdown_listener.changed().await;
+            shutdown_listener.wait_self_shutdown().await;
         };
         let (
             kv_server,
@@ -347,7 +344,7 @@ impl XlineServer {
                     self.is_leader,
                     Arc::clone(&client),
                     header_gen.general_revision_arc(),
-                    Arc::clone(&self.shutdown_trigger),
+                    self.shutdown_trigger.subscribe(),
                     auto_config_cfg,
                 )
                 .await,
@@ -364,7 +361,7 @@ impl XlineServer {
             snapshot_allocator,
             state,
             Arc::clone(&self.curp_cfg),
-            self.shutdown_trigger.subscribe(),
+            self.shutdown_trigger.clone(),
         )
         .await;
 
@@ -418,8 +415,7 @@ impl XlineServer {
     /// Stop `XlineServer`
     #[inline]
     pub async fn stop(&self) {
-        let _r = self.shutdown_trigger.send(true);
-        self.shutdown_trigger.closed().await;
+        self.shutdown_trigger.self_shutdown_and_wait().await;
     }
 }
 
