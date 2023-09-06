@@ -47,6 +47,8 @@ where
     cluster_info: Arc<ClusterInfo>,
     /// Shutdown listener
     shutdown_listener: shutdown::Listener,
+    /// Name of the server
+    name: String,
 }
 
 impl<S> LeaseServer<S>
@@ -61,6 +63,7 @@ where
         id_gen: Arc<IdGenerator>,
         cluster_info: Arc<ClusterInfo>,
         shutdown_listener: shutdown::Listener,
+        name: String,
     ) -> Arc<Self> {
         let lease_server = Arc::new(Self {
             lease_storage,
@@ -69,6 +72,7 @@ where
             id_gen,
             cluster_info,
             shutdown_listener,
+            name,
         });
         let _h = tokio::spawn(Self::revoke_expired_leases_task(Arc::clone(&lease_server)));
         lease_server
@@ -114,11 +118,7 @@ where
 
     /// Generate propose id
     fn generate_propose_id(&self) -> ProposeId {
-        ProposeId::new(format!(
-            "{}-{}",
-            self.cluster_info.self_name(),
-            Uuid::new_v4()
-        ))
+        ProposeId::new(format!("{}-{}", self.name, Uuid::new_v4()))
     }
 
     /// Propose request and get result with fast/slow path
@@ -317,7 +317,7 @@ where
                 break self
                     .follower_keep_alive(
                         request_stream,
-                        leader_addr,
+                        &leader_addr,
                         self.shutdown_listener.clone(),
                     )
                     .await?;

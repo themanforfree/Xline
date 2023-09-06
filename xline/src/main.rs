@@ -526,7 +526,7 @@ async fn main() -> Result<()> {
 
     let db_proxy = DB::open(storage_config)?;
     let server = XlineServer::new(
-        cluster_info.into(),
+        cluster_info,
         *cluster_config.is_leader(),
         cluster_config.curp_config().clone(),
         *cluster_config.client_config(),

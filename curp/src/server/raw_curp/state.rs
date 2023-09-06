@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    ops::{Deref, DerefMut},
     sync::Arc,
 };
 
@@ -51,12 +52,22 @@ pub(super) struct CandidateState<C> {
 }
 
 /// Status of a follower
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub(super) struct FollowerStatus {
     /// Index of the next log entry to send to that follower
     pub(super) next_index: LogIndex,
     /// Index of highest log entry known to be replicated on that follower
     pub(super) match_index: LogIndex,
+}
+
+impl FollowerStatus {
+    /// Create a `FollowerStatus`
+    pub(super) fn new(next_index: LogIndex, match_index: LogIndex) -> Self {
+        Self {
+            next_index,
+            match_index,
+        }
+    }
 }
 
 /// Additional state for the leader, all volatile
@@ -106,17 +117,27 @@ impl LeaderState {
         Self {
             statuses: others
                 .iter()
-                .map(|id| {
-                    (
-                        *id,
-                        FollowerStatus {
-                            next_index: 1,
-                            match_index: 0,
-                        },
-                    )
-                })
+                .map(|o| (*o, FollowerStatus::new(1, 0)))
                 .collect(),
         }
+    }
+
+    /// Get all status for a server
+    pub(super) fn get_all_statuses(&self) -> HashMap<ServerId, FollowerStatus> {
+        self.statuses
+            .iter()
+            .map(|e| (*e.key(), *e.value()))
+            .collect()
+    }
+
+    /// insert new status for id
+    pub(super) fn insert(&self, id: ServerId) {
+        _ = self.statuses.insert(id, FollowerStatus::new(1, 0));
+    }
+
+    /// Remove a status
+    pub(super) fn remove(&self, id: ServerId) {
+        _ = self.statuses.remove(&id);
     }
 
     /// Get status for a server
@@ -188,7 +209,7 @@ trait ClusterConfig {
 }
 
 /// `MajorityConfig` is a set of IDs that uses majority quorums to make decisions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct MajorityConfig {
     /// The voters in the cluster
     voters: HashSet<ServerId>,
@@ -196,15 +217,49 @@ pub(super) struct MajorityConfig {
 
 impl MajorityConfig {
     /// Create a new `MajorityConfig`
-    fn new(voters: impl Iterator<Item = ServerId>) -> Self {
+    pub(super) fn new(voters: impl Iterator<Item = ServerId>) -> Self {
         Self {
             voters: voters.collect(),
         }
     }
 
+    /// Get voters set
+    pub(super) fn voters(&self) -> &HashSet<ServerId> {
+        &self.voters
+    }
+
+    /// Insert a voter
+    pub(super) fn insert(&mut self, id: ServerId) -> bool {
+        self.voters.insert(id)
+    }
+
+    /// Remove a voter
+    pub(super) fn remove(&mut self, id: ServerId) -> bool {
+        self.voters.remove(&id)
+    }
+
+    /// Check if a voter exists
+    pub(super) fn contains(&self, id: ServerId) -> bool {
+        self.voters.contains(&id)
+    }
+
     /// Get quorum: the smallest number of servers who must be online for the cluster to work
-    pub(super) fn quorum(&self) -> usize {
+    fn quorum(&self) -> usize {
         self.voters.len() / 2 + 1
+    }
+}
+
+impl Deref for MajorityConfig {
+    type Target = HashSet<ServerId>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.voters
+    }
+}
+
+impl DerefMut for MajorityConfig {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.voters
     }
 }
 

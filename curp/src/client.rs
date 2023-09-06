@@ -13,6 +13,7 @@ use tokio::time::timeout;
 use tracing::{debug, instrument, warn};
 use utils::config::ClientConfig;
 
+use crate::rpc::connect::ConnectApiWrapper;
 use crate::{
     cmd::{Command, ProposeId},
     error::{
@@ -21,10 +22,11 @@ use crate::{
     members::ServerId,
     rpc::{
         self, connect::ConnectApi, protocol_client::ProtocolClient, FetchClusterRequest,
-        FetchClusterResponse, FetchLeaderRequest, FetchReadStateRequest, ProposeRequest,
-        ReadState as PbReadState, ShutdownRequest, SyncResult, WaitSyncedRequest,
+        FetchClusterResponse, FetchLeaderRequest, FetchReadStateRequest, Member,
+        ProposeConfChangeRequest, ProposeRequest, ReadState as PbReadState, ShutdownRequest,
+        SyncResult, WaitSyncedRequest,
     },
-    LogIndex,
+    ConfChangeError, LogIndex,
 };
 
 /// Protocol client
@@ -39,7 +41,7 @@ pub struct Client<C: Command> {
     state: RwLock<State>,
     /// All servers's `Connect`
     #[builder(setter(skip))]
-    connects: DashMap<ServerId, Arc<dyn ConnectApi>>,
+    connects: DashMap<ServerId, ConnectApiWrapper>,
     /// Curp client config settings
     config: ClientConfig,
     /// To keep Command type
@@ -632,6 +634,54 @@ where
                 Err(e) => Err(e),
             }
         }
+    }
+
+    /// Propose the conf change request to servers
+    #[instrument(skip_all)]
+    pub async fn propose_conf_change(
+        &self,
+        conf_change: ProposeConfChangeRequest,
+    ) -> Result<Result<Vec<Member>, ConfChangeError>, CommandProposeError<C>> {
+        debug!(
+            "propose_conf_change with propose_id({}) started",
+            conf_change.id()
+        );
+        let retry_timeout = *self.config.retry_timeout();
+        let retry_count = *self.config.retry_count();
+        for _ in 0..retry_count {
+            // fetch leader id
+            let leader_id = match self.get_leader_id().await {
+                Ok(leader_id) => leader_id,
+                Err(e) => {
+                    warn!("failed to fetch leader, {e}");
+                    continue;
+                }
+            };
+            debug!("propose_conf_change request sent to {}", leader_id);
+
+            let resp = match self
+                .get_connect(leader_id)
+                .unwrap_or_else(|| unreachable!("leader {leader_id} not found"))
+                .propose_conf_change(conf_change.clone(), *self.config.wait_synced_timeout())
+                .await
+            {
+                Ok(resp) => resp.into_inner(),
+                Err(e) => {
+                    warn!("wait synced rpc error: {e}");
+                    tokio::time::sleep(retry_timeout).await;
+                    continue;
+                }
+            };
+            return match resp.error {
+                Some(e) => {
+                    let error = ConfChangeError::from_i32(e)
+                        .unwrap_or_else(|| unreachable!("error code from rpc must be valid"));
+                    Ok(Err(error))
+                }
+                None => Ok(Ok(resp.members)),
+            };
+        }
+        Err(CommandProposeError::Propose(ProposeError::Timeout))
     }
 
     /// Fetch Read state from leader

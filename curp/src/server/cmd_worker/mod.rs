@@ -121,8 +121,7 @@ async fn worker_exe<
             );
             er_ok
         }
-        EntryData::ConfChange(_) => false, // TODO: implement conf change
-        EntryData::Shutdown(_) => true,
+        EntryData::ConfChange(_) | EntryData::Shutdown(_) => true,
     }
 }
 
@@ -160,7 +159,15 @@ async fn worker_as<
             cb.write().notify_shutdown();
             true
         }
-        EntryData::ConfChange(_) => false, // TODO: implement conf change
+        EntryData::ConfChange(ref conf_change) => {
+            let changes = conf_change.changes().to_owned();
+            let res = curp.apply_conf_change(changes).await;
+            if let Err(e) = ce.set_last_applied(entry.index) {
+                error!("failed to set last_applied, {e}");
+            }
+            cb.write().insert_conf(entry.id(), res);
+            true
+        }
     }
 }
 
@@ -246,7 +253,7 @@ struct TaskRx<C: Command>(flume::Receiver<Task<C>>);
 
 /// Send cmd to background execution worker
 #[cfg_attr(test, automock)]
-pub(super) trait CEEventTxApi<C: Command + 'static>: Send + Sync + 'static {
+pub(super) trait CEEventTxApi<C: Command + 'static>: Send + Sync + 'static + Debug {
     /// Send cmd to background cmd worker for speculative execution
     fn send_sp_exe(&self, entry: Arc<LogEntry<C>>);
 

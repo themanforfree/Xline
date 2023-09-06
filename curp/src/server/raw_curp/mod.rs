@@ -11,7 +11,7 @@
 
 use std::{
     cmp::min,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::Debug,
     sync::{
         atomic::{AtomicU8, Ordering},
@@ -20,6 +20,7 @@ use std::{
 };
 
 use clippy_utilities::NumericCast;
+use dashmap::DashMap;
 use event_listener::Event;
 use itertools::Itertools;
 use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
@@ -27,6 +28,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{
     debug, error,
     log::{log_enabled, Level},
+    trace,
 };
 use utils::{
     config::CurpConfig,
@@ -45,7 +47,10 @@ use crate::{
     log_entry::LogEntry,
     members::{ClusterInfo, ServerId},
     role_change::RoleChange,
-    rpc::{IdSet, ReadState},
+    rpc::{
+        connect::ConnectApiWrapper, ConfChange, ConfChangeEntry, ConfChangeError, ConfChangeType,
+        IdSet, Member, ReadState,
+    },
     server::{cmd_board::CmdBoardRef, raw_curp::state::VoteResult, spec_pool::SpecPoolRef},
     snapshot::{Snapshot, SnapshotMeta},
     LogIndex,
@@ -129,6 +134,7 @@ enum Role {
 }
 
 /// Relevant context for Curp
+#[derive(Debug)]
 struct Context<C: Command, RC: RoleChange> {
     /// Cluster information
     cluster_info: Arc<ClusterInfo>,
@@ -147,24 +153,17 @@ struct Context<C: Command, RC: RoleChange> {
     /// Tx to send cmds to execute and do after sync
     cmd_tx: Arc<dyn CEEventTxApi<C>>,
     /// Followers sync event trigger
-    sync_events: HashMap<ServerId, Arc<Event>>,
+    sync_events: DashMap<ServerId, Arc<Event>>,
     /// Become leader event
     leader_event: Arc<Event>,
     /// Leader change callback
     role_change: RC,
-}
-
-impl<C: Command, R: RoleChange> Debug for Context<C, R> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Context")
-            .field("id", &self.cluster_info)
-            .field("config", &self.cfg)
-            .field("cb", &self.cb)
-            .field("sp", &self.sp)
-            .field("leader_tx", &self.leader_tx)
-            .field("election_tick", &self.election_tick)
-            .finish()
-    }
+    /// Conf change tx, used to update sync tasks
+    change_tx: flume::Sender<ConfChange>,
+    /// Conf change tx, used to update sync tasks
+    change_rx: flume::Receiver<ConfChange>,
+    /// Connects of peers
+    connects: DashMap<ServerId, ConnectApiWrapper>,
 }
 
 // Tick
@@ -258,10 +257,10 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
             self.ctx.cmd_tx.send_sp_exe(entry);
         }
 
-        self.ctx.sync_events.iter().for_each(|(id, event)| {
-            let next = self.lst.get_next_index(*id);
+        self.ctx.sync_events.iter().for_each(|e| {
+            let next = self.lst.get_next_index(*e.key());
             if next > log_w.base_index && log_w.has_next_batch(next) {
-                event.notify(1);
+                e.notify(1);
             }
         });
 
@@ -307,10 +306,71 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
         };
 
         let index = entry.index;
-        self.ctx.sync_events.iter().for_each(|(id, event)| {
-            let next = self.lst.get_next_index(*id);
+        self.ctx.sync_events.iter().for_each(|pair| {
+            let next = self.lst.get_next_index(*pair.key());
             if next > log_w.base_index && log_w.has_next_batch(next) {
-                event.notify(1);
+                pair.notify(1);
+            }
+        });
+
+        // check if commit_index needs to be updated
+        if self.can_update_commit_index_to(&log_w, index, self.term()) && index > log_w.commit_index
+        {
+            log_w.commit_index = index;
+            debug!("{} updates commit index to {index}", self.id());
+            self.apply(&mut *log_w);
+        }
+
+        (info, Ok(()))
+    }
+
+    /// Handle `propose_conf_change` request
+    pub(super) fn handle_propose_conf_change(
+        &self,
+        conf_change: ConfChangeEntry,
+    ) -> ((Option<ServerId>, u64), Result<(), ProposeError>) {
+        debug!(
+            "{} gets conf change for with id {}",
+            self.id(),
+            conf_change.id()
+        );
+
+        let st_r = self.st.read();
+        let info = (st_r.leader_id, st_r.term);
+
+        // Non-leader doesn't need to sync or execute
+        if st_r.role != Role::Leader {
+            return (info, Ok(()));
+        }
+
+        if !self
+            .ctx
+            .cb
+            .map_write(|mut cb_w| cb_w.sync.insert(conf_change.id().clone()))
+        {
+            return (info, Err(ProposeError::Duplicated));
+        }
+
+        // leader also needs to check if the cmd conflicts un-synced commands
+
+        let mut log_w = self.log.write();
+
+        let entry = match log_w.push_conf_change(st_r.term, conf_change) {
+            Ok(entry) => {
+                debug!("{} gets new log[{}]", self.id(), entry.index);
+                entry
+            }
+            Err(e) => {
+                return (info, Err(e.into()));
+            }
+        };
+
+        let index = entry.index;
+
+        self.ctx.sync_events.iter().for_each(|pair| {
+            let next = self.lst.get_next_index(*pair.key());
+            if next > log_w.base_index && log_w.has_next_batch(next) {
+                pair.value().notify(1);
             }
         });
 
@@ -337,10 +397,17 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
         entries: Vec<LogEntry<C>>,
         leader_commit: LogIndex,
     ) -> Result<u64, (u64, LogIndex)> {
-        debug!(
-            "{} received append_entries from {}: term({}), commit({}), prev_log_index({}), prev_log_term({}), {} entries",
-            self.id(), leader_id, term, leader_commit, prev_log_index, prev_log_term, entries.len()
-        );
+        if entries.is_empty() {
+            trace!(
+                "{} received heartbeat from {}: term({}), commit({}), prev_log_index({}), prev_log_term({})",
+                self.id(), leader_id, term, leader_commit, prev_log_index, prev_log_term
+            );
+        } else {
+            debug!(
+                "{} received append_entries from {}: term({}), commit({}), prev_log_index({}), prev_log_term({}), {} entries",
+                self.id(), leader_id, term, leader_commit, prev_log_index, prev_log_term, entries.len()
+            );
+        }
 
         // validate term and set leader id
         let st_r = self.st.upgradable_read();
@@ -554,7 +621,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
             // if some entries are recovered, sync with followers immediately
             self.ctx
                 .sync_events
-                .values()
+                .iter()
                 .for_each(|event| event.notify(1));
         }
 
@@ -635,11 +702,13 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
         uncommitted_pool: UncommittedPoolRef<C>,
         cfg: Arc<CurpConfig>,
         cmd_tx: Arc<dyn CEEventTxApi<C>>,
-        sync_events: HashMap<ServerId, Arc<Event>>,
+        sync_events: DashMap<ServerId, Arc<Event>>,
         log_tx: mpsc::UnboundedSender<Arc<LogEntry<C>>>,
         role_change: RC,
         shutdown_trigger: shutdown::Trigger,
+        connects: DashMap<ServerId, ConnectApiWrapper>,
     ) -> Self {
+        let (change_tx, change_rx) = flume::bounded(128);
         let raw_curp = Self {
             st: RwLock::new(State::new(
                 0,
@@ -650,12 +719,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
                 cfg.candidate_timeout_ticks,
             )),
             lst: LeaderState::new(&cluster_info.peers_ids()),
-            cst: Mutex::new(CandidateState::new(
-                cluster_info
-                    .peers_ids()
-                    .into_iter()
-                    .chain([cluster_info.self_id()]),
-            )),
+            cst: Mutex::new(CandidateState::new(cluster_info.all_ids().into_iter())),
             log: RwLock::new(Log::new(log_tx, cfg.batch_max_size, cfg.log_entries_cap)),
             ctx: Context {
                 cluster_info,
@@ -669,6 +733,9 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
                 sync_events,
                 leader_event: Arc::new(Event::new()),
                 role_change,
+                change_tx,
+                change_rx,
+                connects,
             },
             shutdown_trigger,
         };
@@ -690,13 +757,14 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
         uncommitted_pool: UncommittedPoolRef<C>,
         cfg: &Arc<CurpConfig>,
         cmd_tx: Arc<dyn CEEventTxApi<C>>,
-        sync_event: HashMap<ServerId, Arc<Event>>,
+        sync_event: DashMap<ServerId, Arc<Event>>,
         log_tx: mpsc::UnboundedSender<Arc<LogEntry<C>>>,
         voted_for: Option<(u64, ServerId)>,
         entries: Vec<LogEntry<C>>,
         last_applied: LogIndex,
         role_change: RC,
         shutdown_trigger: shutdown::Trigger,
+        connects: DashMap<ServerId, ConnectApiWrapper>,
     ) -> Self {
         let raw_curp = Self::new(
             cluster_info,
@@ -710,6 +778,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
             log_tx,
             role_change,
             shutdown_trigger,
+            connects,
         );
 
         if let Some((term, server_id)) = voted_for {
@@ -732,28 +801,17 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
     pub(super) fn leader(&self) -> (Option<ServerId>, u64) {
         self.st.map_read(|st_r| (st_r.leader_id, st_r.term))
     }
-
-    /// Get cluster info
-    pub(super) fn cluster(&self) -> &ClusterInfo {
-        self.ctx.cluster_info.as_ref()
-    }
-
-    /// Get self's id
-    pub(super) fn id(&self) -> ServerId {
-        self.ctx.cluster_info.self_id()
-    }
-
     /// Get a rx for leader changes
     pub(super) fn leader_rx(&self) -> broadcast::Receiver<Option<ServerId>> {
         self.ctx.leader_tx.subscribe()
     }
 
     /// Get `append_entries` request for `follower_id` that contains the latest log entries
-    pub(super) fn sync(&self, follower_id: ServerId) -> Result<SyncAction<C>, ()> {
+    pub(super) fn sync(&self, follower_id: ServerId) -> Option<SyncAction<C>> {
         let term = {
             let lst_r = self.st.read();
             if lst_r.role != Role::Leader {
-                return Err(());
+                return None;
             }
             lst_r.term
         };
@@ -772,7 +830,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
             // the leader will take a snapshot itself every time `sync` is called in effort to
             // calibrate it. Since taking a snapshot will block the leader's execute workers, we should
             // not take snapshot so often. A better solution would be to keep a snapshot cache.
-            Ok(SyncAction::Snapshot(self.ctx.cmd_tx.send_snapshot(
+            Some(SyncAction::Snapshot(self.ctx.cmd_tx.send_snapshot(
                 SnapshotMeta {
                     last_included_index: entry.index,
                     last_included_term: entry.term,
@@ -789,7 +847,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
                 leader_commit: log_r.commit_index,
                 entries,
             };
-            Ok(SyncAction::AppendEntries(ae))
+            Some(SyncAction::AppendEntries(ae))
         }
     }
 
@@ -840,7 +898,8 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
             self.ctx
                 .sync_events
                 .get(&id)
-                .unwrap_or_else(|| unreachable!("server id {id} not found")),
+                .unwrap_or_else(|| unreachable!("server id {id} not found"))
+                .value(),
         )
     }
 
@@ -855,6 +914,11 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
         !matches!(self.shutdown_trigger.state(), Signal::Running)
     }
 
+    /// Get a shutdown trigger
+    pub(super) fn shutdown_trigger(&self) -> &shutdown::Trigger {
+        &self.shutdown_trigger
+    }
+
     /// Get a shutdown listener
     pub(super) fn shutdown_listener(&self) -> shutdown::Listener {
         self.shutdown_trigger.subscribe()
@@ -865,6 +929,51 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
         let log_r = self.log.read();
         let leader_commit_index = log_r.commit_index;
         self.lst.check_all(|f| f.match_index == leader_commit_index)
+    }
+
+    /// Apply conf changes and return true if self node is removed
+    pub(super) async fn apply_conf_change(
+        &self,
+        changes: Vec<ConfChange>,
+    ) -> Result<bool, ConfChangeError> {
+        assert_eq!(changes.len(), 1, "Joint consensus is not supported yet");
+        let Some(conf_change) = changes.into_iter().next() else {
+            unreachable!("conf change is empty");
+        };
+
+        self.check_new_config(&conf_change)?;
+
+        Ok(self.switch_config(conf_change).await)
+    }
+
+    /// Get a receiver for conf changes
+    pub(super) fn change_rx(&self) -> flume::Receiver<ConfChange> {
+        self.ctx.change_rx.clone()
+    }
+
+    /// Get cluster info
+    pub(super) fn cluster(&self) -> &ClusterInfo {
+        &self.ctx.cluster_info
+    }
+
+    /// Get self's id
+    pub(super) fn id(&self) -> ServerId {
+        self.ctx.cluster_info.self_id()
+    }
+
+    /// Get all connects
+    pub(super) fn connects(&self) -> &DashMap<ServerId, ConnectApiWrapper> {
+        &self.ctx.connects
+    }
+
+    /// Get connect
+    pub(super) fn connect(&self, id: ServerId) -> ConnectApiWrapper {
+        self.ctx
+            .connects
+            .get(&id)
+            .unwrap_or_else(|| unreachable!("server id {id} not found"))
+            .value()
+            .clone()
     }
 }
 
@@ -879,7 +988,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
         log: RwLockUpgradableReadGuard<'_, Log<C>>,
     ) -> Option<Vote> {
         let prev_role = st.role;
-        assert!(prev_role != Role::Leader, "leader can't start election");
+        assert_ne!(prev_role, Role::Leader, "leader can't start election");
 
         st.term += 1;
         st.role = Role::Candidate;
@@ -1078,11 +1187,99 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
     /// When leader retires, it should reset state
     fn leader_retires(&self) {
         debug!("leader {} retires", self.id());
+        self.ctx.cb.write().clear();
+        self.ctx.ucp.lock().clear();
+    }
 
-        let mut cb_w = self.ctx.cb.write();
-        cb_w.clear();
-        let mut ucp_l = self.ctx.ucp.lock();
-        ucp_l.clear();
+    /// Check if the new config is valid
+    #[allow(clippy::unimplemented)] // TODO: remove this when learner is implemented
+    fn check_new_config(&self, conf_change: &ConfChange) -> Result<(), ConfChangeError> {
+        let mut statuses_ids = self
+            .lst
+            .get_all_statuses()
+            .keys()
+            .copied()
+            .chain([self.id()])
+            .collect::<HashSet<_>>();
+        let mut config = self.cst.map_lock(|cst_l| cst_l.config.clone());
+        let conf_change_type =
+            ConfChangeType::from_i32(conf_change.change_type).unwrap_or_else(|| {
+                unreachable!("conf change type {} should valid", conf_change.change_type)
+            });
+        let node_id = conf_change.node_id;
+        match conf_change_type {
+            ConfChangeType::Add => {
+                if !statuses_ids.insert(node_id) || !config.insert(node_id) {
+                    return Err(ConfChangeError::NodeAlreadyExists);
+                }
+            }
+            ConfChangeType::Remove => {
+                if !statuses_ids.remove(&node_id) || !config.remove(node_id) {
+                    return Err(ConfChangeError::NodeNotExists);
+                }
+            }
+            ConfChangeType::Update => {
+                if statuses_ids.get(&node_id).is_none() || !config.contains(node_id) {
+                    return Err(ConfChangeError::NodeNotExists);
+                }
+            }
+            ConfChangeType::AddLearner => {
+                unimplemented!("learner node is not supported yet");
+            }
+        }
+        if statuses_ids.len() < 3 || config.voters() != &statuses_ids {
+            return Err(ConfChangeError::InvalidConfig);
+        }
+        Ok(())
+    }
+
+    /// Switch to a new config and return true if self node is removed
+    #[allow(clippy::unimplemented)] // TODO: remove this when learner is implemented
+    async fn switch_config(&self, conf_change: ConfChange) -> bool {
+        let node_id = conf_change.node_id;
+        let conf_change_type =
+            ConfChangeType::from_i32(conf_change.change_type).unwrap_or_else(|| {
+                unreachable!("conf change type {} should valid", conf_change.change_type)
+            });
+
+        let remove_self = match conf_change_type {
+            ConfChangeType::Add => {
+                let member = Member::new(node_id, "", conf_change.address.clone());
+                self.cst
+                    .map_lock(|mut cst_l| _ = cst_l.config.insert(node_id));
+                self.lst.insert(node_id);
+                _ = self.ctx.sync_events.insert(node_id, Arc::new(Event::new()));
+                self.ctx.cluster_info.insert(member);
+                let connect =
+                    ConnectApiWrapper::new(conf_change.node_id, conf_change.address.clone()).await;
+                _ = self.ctx.connects.insert(connect.id(), connect);
+                false
+            }
+            ConfChangeType::Remove => {
+                self.cst
+                    .map_lock(|mut cst_l| _ = cst_l.config.remove(node_id));
+                self.lst.remove(node_id);
+                _ = self.ctx.sync_events.remove(&node_id);
+                self.ctx.cluster_info.remove(&node_id);
+                _ = self.ctx.connects.remove(&node_id);
+                node_id == self.id()
+            }
+            ConfChangeType::Update => {
+                self.ctx
+                    .cluster_info
+                    .update(&node_id, conf_change.address.clone());
+                // TODO: update connect
+                false
+            }
+            ConfChangeType::AddLearner => {
+                unimplemented!("learner node is not supported yet");
+            }
+        };
+        self.ctx
+            .change_tx
+            .send(conf_change)
+            .unwrap_or_else(|_e| unreachable!("change_rx should not be dropped"));
+        remove_self
     }
 }
 
