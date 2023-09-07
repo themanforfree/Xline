@@ -211,7 +211,7 @@ impl<C: Command> CommandBoard<C> {
         }
     }
 
-    /// Wait for an execution result
+    /// Wait for an conf change result
     pub(super) async fn wait_for_conf(
         cb: &CmdBoardRef<C>,
         id: &ProposeId,

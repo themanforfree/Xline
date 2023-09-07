@@ -14,7 +14,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
     sync::{
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicU64, AtomicU8, Ordering},
         Arc,
     },
 };
@@ -164,6 +164,8 @@ struct Context<C: Command, RC: RoleChange> {
     change_rx: flume::Receiver<ConfChange>,
     /// Connects of peers
     connects: DashMap<ServerId, ConnectApiWrapper>,
+    /// last conf change idx
+    last_conf_change_idx: AtomicU64,
 }
 
 // Tick
@@ -366,6 +368,9 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
         };
 
         let index = entry.index;
+        self.ctx
+            .last_conf_change_idx
+            .store(index, Ordering::Relaxed);
 
         self.ctx.sync_events.iter().for_each(|pair| {
             let next = self.lst.get_next_index(*pair.key());
@@ -736,6 +741,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
                 change_tx,
                 change_rx,
                 connects,
+                last_conf_change_idx: AtomicU64::new(0),
             },
             shutdown_trigger,
         };
@@ -804,6 +810,24 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
     /// Get a rx for leader changes
     pub(super) fn leader_rx(&self) -> broadcast::Receiver<Option<ServerId>> {
         self.ctx.leader_tx.subscribe()
+    }
+
+    /// Check on the leader that the remove node conf change entry has been synced to the removed follower
+    pub(super) fn can_remove_follower_after_hb(&self, follower_id: ServerId) -> bool {
+        if self.ctx.connects.contains_key(&follower_id) {
+            return false;
+        }
+        let match_index = self.lst.get_match_index(follower_id);
+        let last_conf_change_idx = self.ctx.last_conf_change_idx.load(Ordering::Relaxed);
+        if match_index >= last_conf_change_idx {
+            return true;
+        }
+        false
+    }
+
+    /// Remove a follower's status
+    pub(super) fn remove_node_status(&self, follower_id: ServerId) {
+        self.lst.remove(follower_id);
     }
 
     /// Get `append_entries` request for `follower_id` that contains the latest log entries
@@ -1247,9 +1271,10 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
                 let member = Member::new(node_id, "", conf_change.address.clone());
                 self.cst
                     .map_lock(|mut cst_l| _ = cst_l.config.insert(node_id));
+                self.ctx.cluster_info.insert(member);
+
                 self.lst.insert(node_id);
                 _ = self.ctx.sync_events.insert(node_id, Arc::new(Event::new()));
-                self.ctx.cluster_info.insert(member);
                 let connect =
                     ConnectApiWrapper::new(conf_change.node_id, conf_change.address.clone()).await;
                 _ = self.ctx.connects.insert(connect.id(), connect);
@@ -1258,9 +1283,12 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
             ConfChangeType::Remove => {
                 self.cst
                     .map_lock(|mut cst_l| _ = cst_l.config.remove(node_id));
-                self.lst.remove(node_id);
-                _ = self.ctx.sync_events.remove(&node_id);
                 self.ctx.cluster_info.remove(&node_id);
+                // the removed follower need to commit the conf change entry, so when leader applies
+                // the conf change entry, it will not remove the follower status, and after the log
+                // entry is committed on the removed follower, leader will remove the follower status
+                // and stop the sync_follower_task.
+                _ = self.ctx.sync_events.remove(&node_id);
                 _ = self.ctx.connects.remove(&node_id);
                 node_id == self.id()
             }
@@ -1275,10 +1303,12 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
                 unimplemented!("learner node is not supported yet");
             }
         };
-        self.ctx
-            .change_tx
-            .send(conf_change)
-            .unwrap_or_else(|_e| unreachable!("change_rx should not be dropped"));
+        if self.is_leader() {
+            self.ctx
+                .change_tx
+                .send(conf_change)
+                .unwrap_or_else(|_e| unreachable!("change_rx should not be dropped"));
+        }
         remove_self
     }
 }

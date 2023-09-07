@@ -342,21 +342,21 @@ async fn propose_add_node() {
 
 #[tokio::test]
 #[abort_on_panic]
-async fn propose_remove_node() {
+async fn propose_remove_follower() {
     init_logger();
 
     let group = CurpGroup::new(5).await;
     let client = group.new_client(ClientConfig::default()).await;
 
     let id = uuid::Uuid::new_v4().to_string();
-    let leader = group.get_leader().await.0;
-    let node_id = group
+    let leader_id = group.get_leader().await.0;
+    let follower_id = group
         .nodes
         .keys()
-        .find(|&id| id != &leader)
+        .find(|&id| id != &leader_id)
         .copied()
         .unwrap();
-    let changes = vec![ConfChange::remove(node_id)];
+    let changes = vec![ConfChange::remove(follower_id)];
     let conf_change = ProposeConfChangeRequest::new(id, changes);
     let members = client
         .propose_conf_change(conf_change)
@@ -364,8 +364,35 @@ async fn propose_remove_node() {
         .unwrap()
         .unwrap();
     assert_eq!(members.len(), 4);
-    assert!(members.iter().all(|m| m.id != node_id));
+    assert!(members.iter().all(|m| m.id != follower_id));
     sleep_millis(500).await;
+    assert!(group.nodes.get(&follower_id).unwrap().handle.is_finished());
+    group.stop().await;
+}
+
+#[tokio::test]
+#[abort_on_panic]
+async fn propose_remove_leader() {
+    // init_logger();
+
+    let group = CurpGroup::new(5).await;
+    let client = group.new_client(ClientConfig::default()).await;
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let leader_id = group.get_leader().await.0;
+    let changes = vec![ConfChange::remove(leader_id)];
+    let conf_change = ProposeConfChangeRequest::new(id, changes);
+    let members = client
+        .propose_conf_change(conf_change)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(members.len(), 4);
+    assert!(members.iter().all(|m| m.id != leader_id));
+    sleep_secs(3).await; // wait for the new leader to be elected
+    assert!(group.nodes.get(&leader_id).unwrap().handle.is_finished());
+    let new_leader_id = group.get_leader().await.0;
+    assert_ne!(new_leader_id, leader_id);
     group.stop().await;
 }
 

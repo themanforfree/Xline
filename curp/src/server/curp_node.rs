@@ -390,27 +390,27 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
                 }
             }
             let (sync_task_tx, mut sync_task_rx) = mpsc::channel(128);
-            let mut shutdown_events = HashMap::new();
+            let mut remove_events = HashMap::new();
 
             for c in curp.connects().iter() {
                 let sync_event = curp.sync_event(c.id());
-                let shutdown_event = Arc::new(Event::new());
+                let remove_event = Arc::new(Event::new());
                 let fut = Self::sync_follower_task(
                     Arc::clone(&curp),
                     Arc::clone(c.value()),
                     sync_event,
-                    Arc::clone(&shutdown_event),
+                    Arc::clone(&remove_event),
                 );
                 sync_task_tx
                     .send(tokio::spawn(fut))
                     .await
                     .unwrap_or_else(|_e| unreachable!("receiver should not be closed"));
-                _ = shutdown_events.insert(c.id(), shutdown_event);
+                _ = remove_events.insert(c.id(), remove_event);
             }
 
             let _handle = tokio::spawn(Self::conf_change_handler(
                 Arc::clone(&curp),
-                shutdown_events,
+                remove_events,
                 sync_task_tx,
             ));
 
@@ -435,7 +435,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
     /// Handler of conf
     async fn conf_change_handler(
         curp: Arc<RawCurp<C, RC>>,
-        mut shutdown_events: HashMap<ServerId, Arc<Event>>,
+        mut remove_events: HashMap<ServerId, Arc<Event>>,
         sender: mpsc::Sender<JoinHandle<bool>>,
     ) {
         let change_rx = curp.change_rx();
@@ -455,21 +455,24 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
                         ConfChangeType::Add | ConfChangeType::AddLearner => {
                             let connect = curp.connect(change.node_id);
                             let sync_event = curp.sync_event(change.node_id);
-                            let shutdown_event = Arc::new(Event::new());
+                            let remove_event = Arc::new(Event::new());
                             sender
                                 .send(tokio::spawn(Self::sync_follower_task(
                                     Arc::clone(&curp),
                                     connect.into_inner(),
                                     sync_event,
-                                    Arc::clone(&shutdown_event),
+                                    Arc::clone(&remove_event),
                                 )))
                                 .await
                                 .unwrap();
-                            _ = shutdown_events.insert(change.node_id, shutdown_event);
+                            _ = remove_events.insert(change.node_id, remove_event);
                         }
                         ConfChangeType::Remove => {
-                            let Some(event) = shutdown_events.remove(&change.node_id) else {
-                                unreachable!("shutdown_event of removed follower should exist");
+                            if change.node_id == curp.id() {
+                                break;
+                            }
+                            let Some(event) = remove_events.remove(&change.node_id) else {
+                                unreachable!("({:?}) shutdown_event of removed follower ({:x}) should exist", curp.id(), change.node_id);
                             };
                             event.notify(1);
                         }
@@ -488,7 +491,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
         curp: Arc<RawCurp<C, RC>>,
         connect: Arc<impl ConnectApi + ?Sized>,
         sync_event: Arc<Event>,
-        shutdown_event: Arc<Event>,
+        remove_event: Arc<Event>,
     ) -> bool {
         debug!("{} to {} sync follower task start", curp.id(), connect.id());
         let mut shutdown_listener = curp.shutdown_listener();
@@ -498,6 +501,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
         let id = connect.id();
         let batch_timeout = curp.cfg().batch_timeout;
         let mut is_shutdown_state = false;
+        let mut is_remove_state = false;
 
         #[allow(clippy::integer_arithmetic)] // tokio select internal triggered
         let leader_retired = loop {
@@ -516,9 +520,8 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
                         },
                     }
                 }
-                _ = shutdown_event.listen() => {
-                    // node removed
-                    break false;
+                _ = remove_event.listen() => {
+                    is_remove_state = true;
                 }
                 _now = ticker.tick() => {
                     hb_opt = false;
@@ -529,6 +532,9 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
                     }
                 }
             }
+
+            let can_remove_node = is_remove_state && curp.can_remove_follower_after_hb(id);
+
             let Some(sync_action) = curp.sync(id) else {
                 break true;
             };
@@ -551,6 +557,10 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
                             hb_opt = true;
                         }
                         if is_shutdown_state && is_empty && curp.is_synced() {
+                            break false;
+                        }
+                        if can_remove_node {
+                            curp.remove_node_status(id);
                             break false;
                         }
                     }
