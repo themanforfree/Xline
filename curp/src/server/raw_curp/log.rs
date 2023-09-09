@@ -15,7 +15,7 @@ use tracing::error;
 
 use crate::{
     cmd::{Command, ProposeId},
-    log_entry::LogEntry,
+    log_entry::{EntryData, LogEntry},
     rpc::ConfChangeEntry,
     snapshot::SnapshotMeta,
     LogIndex,
@@ -284,6 +284,15 @@ impl<C: 'static + Command> Log<C> {
         }
     }
 
+    /// Push an empty entry to the end of the log, return its index
+    pub(super) fn push_empty(&mut self, term: u64) -> Result<Arc<LogEntry<C>>, bincode::Error> {
+        let index = self.last_log_index() + 1;
+        let entry = Arc::new(LogEntry::new_empty(index, term));
+        self.entries.push_back(Arc::clone(&entry))?;
+        self.send_persist(Arc::clone(&entry));
+        Ok(entry)
+    }
+
     /// Pack the cmd into a log entry and push it to the end of the log, return its index
     pub(super) fn push_cmd(
         &mut self,
@@ -335,7 +344,16 @@ impl<C: 'static + Command> Log<C> {
 
     /// Get existing cmd ids
     pub(super) fn get_cmd_ids(&self) -> HashSet<&ProposeId> {
-        self.entries.iter().map(|entry| entry.id()).collect()
+        self.entries
+            .iter()
+            .filter_map(|entry| {
+                if matches!(entry.entry_data, EntryData::Empty | EntryData::Shutdown) {
+                    None
+                } else {
+                    Some(entry.id())
+                }
+            })
+            .collect()
     }
 
     /// Get previous log entry's term and index

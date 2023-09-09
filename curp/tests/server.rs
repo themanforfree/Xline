@@ -371,7 +371,7 @@ async fn propose_remove_follower() {
 #[tokio::test]
 #[abort_on_panic]
 async fn propose_remove_leader() {
-    // init_logger();
+    init_logger();
 
     let group = CurpGroup::new(5).await;
     let client = group.new_client(ClientConfig::default()).await;

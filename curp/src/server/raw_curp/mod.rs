@@ -86,6 +86,7 @@ pub(super) struct RawCurp<C: Command, RC: RoleChange> {
 }
 
 /// Actions of syncing
+#[derive(Debug)] // TODO
 pub(super) enum SyncAction<C> {
     /// Use append entries to calibrate
     AppendEntries(AppendEntries<C>),
@@ -107,6 +108,7 @@ pub(super) struct Vote {
 }
 
 /// Invoked by leader to replicate log entries; also used as heartbeat
+#[derive(Debug)]
 pub(super) struct AppendEntries<C> {
     /// Leader's term
     pub(super) term: u64,
@@ -611,6 +613,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
 
         let prev_last_log_index = log_w.last_log_index();
         self.recover_from_spec_pools(&mut st_w, &mut log_w, spec_pools);
+        let _ignore = log_w.push_empty(st_w.term);
         let last_log_index = log_w.last_log_index();
 
         self.become_leader(&mut st_w);

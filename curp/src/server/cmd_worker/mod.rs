@@ -121,7 +121,7 @@ async fn worker_exe<
             );
             er_ok
         }
-        EntryData::ConfChange(_) | EntryData::Shutdown => true,
+        EntryData::ConfChange(_) | EntryData::Shutdown | EntryData::Empty => true,
     }
 }
 
@@ -167,17 +167,11 @@ async fn worker_as<
             }
             cb.write().insert_conf(entry.id(), res);
             if res.is_ok_and(|r| r) {
-                if curp.is_leader() {
-                    // if leader need to remove itself, it will enter shutdown state,
-                    // and sync the conf change entry to all followers
-                    curp.enter_shutdown();
-                } else {
-                    // if foolower need to remove itself, just shutdown
-                    curp.shutdown_trigger().self_shutdown();
-                }
+                curp.shutdown_trigger().self_shutdown();
             }
-            true
+            res.is_ok()
         }
+        EntryData::Empty => true,
     }
 }
 
