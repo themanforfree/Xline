@@ -116,9 +116,7 @@ message FetchReadStateResponse {
     }
 }
 
-message ShutdownRequest {
-    string id = 1;
-}
+message ShutdownRequest {}
 
 message ShutdownResponse {
     optional uint64 leader_id = 1;

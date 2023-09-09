@@ -285,10 +285,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
     }
 
     /// Handle `shutdown` request
-    pub(super) fn handle_shutdown(
-        &self,
-        propose_id: ProposeId,
-    ) -> ((Option<ServerId>, u64), Result<(), ProposeError>) {
+    pub(super) fn handle_shutdown(&self) -> ((Option<ServerId>, u64), Result<(), ProposeError>) {
         let st_r = self.st.read();
         let info = (st_r.leader_id, st_r.term);
         if st_r.role != Role::Leader {
@@ -297,7 +294,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
 
         let mut log_w = self.log.write();
 
-        let entry = match log_w.push_shutdown(st_r.term, propose_id) {
+        let entry = match log_w.push_shutdown(st_r.term) {
             Ok(entry) => {
                 debug!("{} gets new log[{}]", self.id(), entry.index);
                 entry

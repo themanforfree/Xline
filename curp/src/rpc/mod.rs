@@ -410,13 +410,6 @@ impl FetchReadStateResponse {
     }
 }
 
-impl ShutdownRequest {
-    /// Create a new shutdown request
-    pub(crate) fn new(id: ProposeId) -> Self {
-        Self { id: id.into() }
-    }
-}
-
 #[allow(clippy::as_conversions)] // those conversions are safe
 impl ConfChange {
     /// Create a new `ConfChange` to add a node

@@ -21,13 +21,14 @@ pub(crate) struct LogEntry<C> {
 
 /// Entry data of a `LogEntry`
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(variant_size_differences)] // TODO
 pub(crate) enum EntryData<C> {
     /// `Command` entry
     Command(Arc<C>),
     /// `ConfChange` entry
     ConfChange(ConfChangeEntry),
     /// `Shutdown` entry
-    Shutdown(ProposeId),
+    Shutdown,
 }
 
 impl<C> LogEntry<C>
@@ -44,11 +45,11 @@ where
     }
 
     /// Create a new `LogEntry` of `Shutdown`
-    pub(super) fn new_shutdown(index: LogIndex, term: u64, propose_id: ProposeId) -> Self {
+    pub(super) fn new_shutdown(index: LogIndex, term: u64) -> Self {
         Self {
             term,
             index,
-            entry_data: EntryData::Shutdown(propose_id),
+            entry_data: EntryData::Shutdown,
         }
     }
 
@@ -70,7 +71,9 @@ where
         match self.entry_data {
             EntryData::Command(ref cmd) => cmd.id(),
             EntryData::ConfChange(ref e) => e.id(),
-            EntryData::Shutdown(ref id) => id,
+            EntryData::Shutdown => {
+                unreachable!("LogEntry::id() should not be called on a shutdown entry")
+            }
         }
     }
 }

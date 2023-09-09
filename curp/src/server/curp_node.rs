@@ -147,10 +147,9 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
     /// Handle `propose_shutdown` requests
     pub(super) async fn shutdown(
         &self,
-        request: ShutdownRequest,
+        _request: ShutdownRequest,
     ) -> Result<ShutdownResponse, CurpError> {
-        let propose_id = ProposeId::new(request.id);
-        let ((leader_id, term), result) = self.curp.handle_shutdown(propose_id);
+        let ((leader_id, term), result) = self.curp.handle_shutdown();
         let error = match result {
             Ok(()) => None,
             Err(err) => Some(bincode::serialize(&err)?),
