@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use curp_external_api::cmd::{PbSerialize, PbSerializeError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -13,17 +13,17 @@ pub(crate) use self::proto::{
     wait_synced_response::{Success, SyncResult as SyncResultRaw},
     AppendEntriesRequest, AppendEntriesResponse, Empty, FetchClusterRequest, FetchClusterResponse,
     FetchReadStateRequest, FetchReadStateResponse, IdSet, InstallSnapshotRequest,
-    InstallSnapshotResponse, Member, ProposeError as PbProposeErrorOuter, RedirectData,
-    ShutdownRequest, ShutdownResponse, SyncError as PbSyncErrorOuter, VoteRequest, VoteResponse,
-    WaitSyncedRequest, WaitSyncedResponse,
+    InstallSnapshotResponse, ProposeError as PbProposeErrorOuter, RedirectData, ShutdownRequest,
+    ShutdownResponse, SyncError as PbSyncErrorOuter, VoteRequest, VoteResponse, WaitSyncedRequest,
+    WaitSyncedResponse,
 };
 pub use self::proto::{
     propose_conf_change_request::{ConfChange, ConfChangeType},
     propose_conf_change_response::ConfChangeError,
     protocol_client,
     protocol_server::ProtocolServer,
-    FetchLeaderRequest, FetchLeaderResponse, ProposeConfChangeRequest, ProposeConfChangeResponse,
-    ProposeRequest, ProposeResponse,
+    FetchLeaderRequest, FetchLeaderResponse, Member, ProposeConfChangeRequest,
+    ProposeConfChangeResponse, ProposeRequest, ProposeResponse,
 };
 
 use crate::{
@@ -83,13 +83,15 @@ impl FetchClusterResponse {
     /// Create a new `FetchClusterResponse`
     pub(crate) fn new(
         leader_id: Option<ServerId>,
-        all_members: HashMap<ServerId, String>,
         term: u64,
+        cluster_id: u64,
+        members: Vec<Member>,
     ) -> Self {
         Self {
             leader_id,
-            all_members,
             term,
+            cluster_id,
+            members,
         }
     }
 }

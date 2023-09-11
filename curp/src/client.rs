@@ -126,7 +126,12 @@ impl<C: Command> Builder<C> {
         let res = self
             .fetch_cluster(addrs.clone(), *config.propose_timeout())
             .await?;
-        let connects = rpc::connect(res.all_members).await.collect();
+        let all_members = res
+            .members
+            .into_iter()
+            .map(|m| (m.id, m.addrs))
+            .collect::<HashMap<_, _>>();
+        let connects = rpc::connect(all_members).await.collect();
         let client = Client::<C> {
             local_server_id: self.local_server_id,
             state: RwLock::new(State::new(res.leader_id, res.term)),

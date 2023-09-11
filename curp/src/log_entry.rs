@@ -21,14 +21,13 @@ pub(crate) struct LogEntry<C> {
 
 /// Entry data of a `LogEntry`
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(variant_size_differences)] // TODO
 pub(crate) enum EntryData<C> {
     /// Empty entry
     Empty,
     /// `Command` entry
     Command(Arc<C>),
     /// `ConfChange` entry
-    ConfChange(ConfChangeEntry),
+    ConfChange(Box<ConfChangeEntry>),
     /// `Shutdown` entry
     Shutdown,
 }
@@ -73,7 +72,7 @@ where
         Self {
             term,
             index,
-            entry_data: EntryData::ConfChange(conf_change),
+            entry_data: EntryData::ConfChange(Box::new(conf_change)),
         }
     }
 

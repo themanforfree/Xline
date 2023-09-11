@@ -258,8 +258,11 @@ impl<C: 'static + Command, RC: RoleChange + 'static> CurpNode<C, RC> {
         _req: FetchClusterRequest,
     ) -> Result<FetchClusterResponse, CurpError> {
         let (leader_id, term) = self.curp.leader();
-        let all_members = self.curp.cluster().all_members_addrs();
-        Ok(FetchClusterResponse::new(leader_id, all_members, term))
+        let cluster_id = self.curp.cluster().cluster_id();
+        let members = self.curp.cluster().members();
+        Ok(FetchClusterResponse::new(
+            leader_id, term, cluster_id, members,
+        ))
     }
 
     /// Install snapshot

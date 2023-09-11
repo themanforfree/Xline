@@ -9,19 +9,22 @@ use clippy_utilities::NumericCast;
 use curp::{
     client::Builder,
     error::{CommandProposeError, ProposeError},
-    members::ClusterInfo,
+    members::{ClusterInfo, Member},
     ConfChange, ConfChangeError, ProposeConfChangeRequest,
 };
+use curp_external_api::cmd::ProposeId;
 use curp_test_utils::{
     init_logger, sleep_millis, sleep_secs,
-    test_cmd::{TestCommand, TestCommandResult},
+    test_cmd::{TestCommand, TestCommandResult, TestCommandType},
 };
 use madsim::rand::{thread_rng, Rng};
 use test_macros::abort_on_panic;
+use tokio::net::TcpListener;
 use utils::config::ClientConfig;
 
 use crate::common::curp_group::{
-    proto::propose_response::ExeResult, CurpGroup, ProposeRequest, ProposeResponse,
+    proto::{propose_response::ExeResult, FetchClusterRequest},
+    CurpGroup, ProposeRequest, ProposeResponse,
 };
 
 mod common;
@@ -60,7 +63,7 @@ async fn client_build_from_addrs_should_fetch_cluster_from_server() {
     init_logger();
     let group = CurpGroup::new(3).await;
 
-    let all_addrs = group.all.values().cloned().collect::<Vec<_>>();
+    let all_addrs = group.all_addrs().cloned().collect();
     let _client = Builder::<TestCommand>::default()
         .config(ClientConfig::default())
         .build_from_addrs(all_addrs)
@@ -161,8 +164,8 @@ async fn fast_round_is_slower_than_slow_round() {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // send propose to follower
-    let follower_addr = group.all.keys().find(|&id| &leader != id).unwrap();
-    let mut follower_connect = group.get_connect(follower_addr).await;
+    let follower_id = group.nodes.keys().find(|&id| &leader != id).unwrap();
+    let mut follower_connect = group.get_connect(follower_id).await;
 
     // the follower should response empty immediately
     let resp: ProposeResponse = follower_connect
@@ -433,6 +436,86 @@ async fn propose_remove_node_failed() {
     let conf_change = ProposeConfChangeRequest::new(id, changes);
     let res = client.propose_conf_change(conf_change).await.unwrap();
     assert!(matches!(res, Err(ConfChangeError::InvalidConfig)));
+
+    group.stop().await;
+}
+
+#[tokio::test]
+#[abort_on_panic]
+async fn propose_start_new_node() {
+    init_logger();
+
+    let mut group = CurpGroup::new(3).await;
+    let client = group.new_client(ClientConfig::default()).await;
+
+    let _res = client
+        .propose(TestCommand::new_put(vec![123], 123), true)
+        .await;
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let node_id = ClusterInfo::calculate_member_id(&addr, "", Some(123));
+    let changes = vec![ConfChange::add(node_id, addr.clone())];
+    let conf_change = ProposeConfChangeRequest::new(id, changes);
+
+    let members = client
+        .propose_conf_change(conf_change)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(members.len(), 4);
+    assert!(members.iter().any(|m| m.id == node_id));
+
+    /*******  start new node *******/
+
+    // 1. fetch cluster from other nodes
+    let leader_id = group.get_leader().await.0;
+    let mut connect = group.get_connect(&leader_id).await;
+    let cluster_res = connect
+        .fetch_cluster(tonic::Request::new(FetchClusterRequest {}))
+        .await
+        .unwrap()
+        .into_inner();
+    let members = cluster_res
+        .members
+        .into_iter()
+        .map(|m| Member::new(m.id, m.name, m.addrs))
+        .collect();
+    let cluster_info = Arc::new(ClusterInfo::from_members(
+        cluster_res.cluster_id,
+        members,
+        &addr,
+    ));
+
+    // 2. start new node
+    group
+        .run_node(listener, "new_node".to_owned(), cluster_info)
+        .await;
+
+    // 3. fetch and check cluster from new node
+    let mut new_connect = group.get_connect(&node_id).await;
+    let res = new_connect
+        .fetch_cluster(tonic::Request::new(FetchClusterRequest {}))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(res.members.len(), 4);
+    assert!(res.members.iter().any(|m| m.id == node_id));
+
+    // 4. check if the new node executes the command from old cluster
+    let new_node = group.nodes.get_mut(&node_id).unwrap();
+    let (cmd, res) = new_node.exe_rx.recv().await.unwrap();
+    assert_eq!(
+        cmd,
+        TestCommand {
+            id: ProposeId::new("1".to_owned()),
+            keys: vec![123],
+            cmd_type: TestCommandType::Put(123),
+            ..Default::default()
+        }
+    );
+    assert_eq!(res.values, vec![]);
 
     group.stop().await;
 }

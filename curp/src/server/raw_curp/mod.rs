@@ -86,7 +86,6 @@ pub(super) struct RawCurp<C: Command, RC: RoleChange> {
 }
 
 /// Actions of syncing
-#[derive(Debug)] // TODO
 pub(super) enum SyncAction<C> {
     /// Use append entries to calibrate
     AppendEntries(AppendEntries<C>),

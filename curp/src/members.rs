@@ -5,7 +5,7 @@ use std::{
     hash::Hasher,
 };
 
-use crate::rpc::Member;
+pub use crate::rpc::Member;
 
 /// Server Id
 pub type ServerId = u64;
@@ -69,6 +69,27 @@ impl ClusterInfo {
         cluster_info
     }
 
+    /// Construct a new `ClusterInfo` from members
+    #[inline]
+    #[must_use]
+    pub fn from_members(cluster_id: u64, members: Vec<Member>, self_addr: &str) -> Self {
+        let mut member_id = 0;
+        let members = members
+            .into_iter()
+            .map(|member| {
+                if member.addrs == self_addr {
+                    member_id = member.id;
+                }
+                (member.id, member)
+            })
+            .collect();
+        Self {
+            cluster_id,
+            member_id,
+            members,
+        }
+    }
+
     /// Get all members
     #[must_use]
     #[inline]
@@ -97,6 +118,15 @@ impl ClusterInfo {
             .get_mut(id)
             .unwrap_or_else(|| unreachable!("member {} not found", id))
             .addrs = address.into();
+    }
+
+    /// Update a member
+    #[inline]
+    pub fn publish(&self, id: &ServerId, name: impl Into<String>) {
+        self.members
+            .get_mut(id)
+            .unwrap_or_else(|| unreachable!("member {} not found", id))
+            .name = name.into();
     }
 
     /// Get server address via server id
