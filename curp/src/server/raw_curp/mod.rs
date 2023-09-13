@@ -1106,11 +1106,9 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
         }
 
         let replicated_cnt: u64 = self
-            .ctx
-            .cluster_info
-            .peers_ids()
-            .into_iter()
-            .filter(|&id| self.lst.get_match_index(id) >= i)
+            .lst
+            .iter()
+            .filter(|f| !f.is_learner && f.match_index >= i)
             .count()
             .numeric_cast();
         replicated_cnt + 1 >= self.quorum()
@@ -1199,7 +1197,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
 
     /// Get quorum: the smallest number of servers who must be online for the cluster to work
     fn quorum(&self) -> u64 {
-        (self.ctx.cluster_info.members_len() / 2 + 1).numeric_cast()
+        (self.ctx.cluster_info.voters_len() / 2 + 1).numeric_cast()
     }
 
     /// Get `recover_quorum`: the smallest number of servers who must contain a command in speculative pool for it to be recovered
@@ -1232,7 +1230,7 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
         let node_id = conf_change.node_id;
         match conf_change_type {
             ConfChangeType::Add => {
-                if !statuses_ids.insert(node_id) || !config.insert(node_id) {
+                if !statuses_ids.insert(node_id) || !config.insert(node_id, false) {
                     return Err(ConfChangeError::NodeAlreadyExists);
                 }
             }
@@ -1242,22 +1240,29 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
                 }
             }
             ConfChangeType::Update => {
-                if statuses_ids.get(&node_id).is_none() || !config.contains(node_id) {
+                if !statuses_ids.contains(&node_id) || !config.contains(node_id) {
                     return Err(ConfChangeError::NodeNotExists);
                 }
             }
             ConfChangeType::AddLearner => {
-                unimplemented!("learner node is not supported yet");
+                if !statuses_ids.insert(node_id) || !config.insert(node_id, true) {
+                    return Err(ConfChangeError::NodeAlreadyExists);
+                }
             }
         }
-        if statuses_ids.len() < 3 || config.voters() != &statuses_ids {
+        let mut all_nodes = HashSet::new();
+        all_nodes.extend(config.voters());
+        all_nodes.extend(config.learners());
+        if statuses_ids.len() < 3
+            || all_nodes != statuses_ids
+            || !config.voters().is_disjoint(config.learners())
+        {
             return Err(ConfChangeError::InvalidConfig);
         }
         Ok(())
     }
 
     /// Switch to a new config and return true if self node is removed
-    #[allow(clippy::unimplemented)] // TODO: remove this when learner is implemented
     async fn switch_config(&self, conf_change: ConfChange) -> bool {
         let node_id = conf_change.node_id;
         let conf_change_type =
@@ -1267,12 +1272,12 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
 
         let remove_self = match conf_change_type {
             ConfChangeType::Add => {
-                let member = Member::new(node_id, "", conf_change.address.clone());
+                let member = Member::new(node_id, "", conf_change.address.clone(), false);
                 self.cst
-                    .map_lock(|mut cst_l| _ = cst_l.config.insert(node_id));
+                    .map_lock(|mut cst_l| _ = cst_l.config.insert(node_id, false));
                 self.ctx.cluster_info.insert(member);
 
-                self.lst.insert(node_id);
+                self.lst.insert(node_id, false);
                 _ = self.ctx.sync_events.insert(node_id, Arc::new(Event::new()));
                 let connect =
                     ConnectApiWrapper::new(conf_change.node_id, conf_change.address.clone()).await;
@@ -1299,7 +1304,17 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
                 false
             }
             ConfChangeType::AddLearner => {
-                unimplemented!("learner node is not supported yet");
+                let member = Member::new(node_id, "", conf_change.address.clone(), true);
+                self.cst
+                    .map_lock(|mut cst_l| _ = cst_l.config.insert(node_id, true));
+                self.ctx.cluster_info.insert(member);
+
+                self.lst.insert(node_id, true);
+                _ = self.ctx.sync_events.insert(node_id, Arc::new(Event::new()));
+                let connect =
+                    ConnectApiWrapper::new(conf_change.node_id, conf_change.address.clone()).await;
+                _ = self.ctx.connects.insert(connect.id(), connect);
+                false
             }
         };
         if self.is_leader() {

@@ -28,10 +28,10 @@ impl<C: 'static + Command, RC: RoleChange + 'static> RawCurp<C, RC> {
     }
 
     fn contains(&self, id: ServerId) -> bool {
-        self.cluster().get_members().contains_key(&id)
+        self.cluster().all_members().contains_key(&id)
             && self.ctx.sync_events.contains_key(&id)
             && self.lst.get_all_statuses().contains_key(&id)
-            && self.cst.lock().config.voters().contains(&id)
+            && self.cst.lock().config.contains(id)
     }
 
     pub(crate) fn commit_index(&self) -> LogIndex {
@@ -698,6 +698,21 @@ async fn add_node() {
         Arc::new(RawCurp::new_test(3, exe_tx, mock_role_change()))
     };
     let changes = vec![ConfChange::add(1, "http://127.0.0.1:4567".to_owned())];
+    assert!(curp.apply_conf_change(changes).await.is_ok());
+    assert!(curp.contains(1));
+}
+
+#[traced_test]
+#[tokio::test]
+async fn add_learner_node() {
+    let curp = {
+        let exe_tx = MockCEEventTxApi::<TestCommand>::default();
+        Arc::new(RawCurp::new_test(3, exe_tx, mock_role_change()))
+    };
+    let changes = vec![ConfChange::add_learner(
+        1,
+        "http://127.0.0.1:4567".to_owned(),
+    )];
     assert!(curp.apply_conf_change(changes).await.is_ok());
     assert!(curp.contains(1));
 }

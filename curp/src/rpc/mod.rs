@@ -11,10 +11,10 @@ pub(crate) use self::proto::{
     protocol_server::Protocol,
     sync_error::SyncError as PbSyncError,
     wait_synced_response::{Success, SyncResult as SyncResultRaw},
-    AppendEntriesRequest, AppendEntriesResponse, Empty, FetchClusterRequest, FetchClusterResponse,
-    FetchReadStateRequest, FetchReadStateResponse, IdSet, InstallSnapshotRequest,
-    InstallSnapshotResponse, ProposeError as PbProposeErrorOuter, RedirectData, ShutdownRequest,
-    ShutdownResponse, SyncError as PbSyncErrorOuter, VoteRequest, VoteResponse, WaitSyncedRequest,
+    AppendEntriesRequest, AppendEntriesResponse, Empty, FetchReadStateRequest,
+    FetchReadStateResponse, IdSet, InstallSnapshotRequest, InstallSnapshotResponse,
+    ProposeError as PbProposeErrorOuter, RedirectData, ShutdownRequest, ShutdownResponse,
+    SyncError as PbSyncErrorOuter, VoteRequest, VoteResponse, WaitSyncedRequest,
     WaitSyncedResponse,
 };
 pub use self::proto::{
@@ -22,8 +22,8 @@ pub use self::proto::{
     propose_conf_change_response::ConfChangeError,
     protocol_client,
     protocol_server::ProtocolServer,
-    FetchLeaderRequest, FetchLeaderResponse, Member, ProposeConfChangeRequest,
-    ProposeConfChangeResponse, ProposeRequest, ProposeResponse,
+    FetchClusterRequest, FetchClusterResponse, FetchLeaderRequest, FetchLeaderResponse, Member,
+    ProposeConfChangeRequest, ProposeConfChangeResponse, ProposeRequest, ProposeResponse,
 };
 
 use crate::{

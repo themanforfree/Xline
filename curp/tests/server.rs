@@ -440,9 +440,7 @@ async fn propose_remove_node_failed() {
     group.stop().await;
 }
 
-#[tokio::test]
-#[abort_on_panic]
-async fn propose_start_new_node() {
+async fn check_new_node(is_learner: bool) {
     init_logger();
 
     let mut group = CurpGroup::new(3).await;
@@ -456,7 +454,11 @@ async fn propose_start_new_node() {
     let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
     let addr = listener.local_addr().unwrap().to_string();
     let node_id = ClusterInfo::calculate_member_id(&addr, "", Some(123));
-    let changes = vec![ConfChange::add(node_id, addr.clone())];
+    let changes = if is_learner {
+        vec![ConfChange::add_learner(node_id, addr.clone())]
+    } else {
+        vec![ConfChange::add(node_id, addr.clone())]
+    };
     let conf_change = ProposeConfChangeRequest::new(id, changes);
 
     let members = client
@@ -480,7 +482,7 @@ async fn propose_start_new_node() {
     let members = cluster_res
         .members
         .into_iter()
-        .map(|m| Member::new(m.id, m.name, m.addrs))
+        .map(|m| Member::new(m.id, m.name, m.addrs, m.is_learner))
         .collect();
     let cluster_info = Arc::new(ClusterInfo::from_members(
         cluster_res.cluster_id,
@@ -501,7 +503,10 @@ async fn propose_start_new_node() {
         .unwrap()
         .into_inner();
     assert_eq!(res.members.len(), 4);
-    assert!(res.members.iter().any(|m| m.id == node_id));
+    assert!(res
+        .members
+        .iter()
+        .any(|m| m.id == node_id && is_learner == m.is_learner));
 
     // 4. check if the new node executes the command from old cluster
     let new_node = group.nodes.get_mut(&node_id).unwrap();
@@ -518,4 +523,16 @@ async fn propose_start_new_node() {
     assert_eq!(res.values, vec![]);
 
     group.stop().await;
+}
+
+#[tokio::test]
+#[abort_on_panic]
+async fn new_follower_node_should_apply_old_cluster_logs() {
+    check_new_node(false).await;
+}
+
+#[tokio::test]
+#[abort_on_panic]
+async fn new_learner_node_should_apply_old_cluster_logs() {
+    check_new_node(true).await;
 }

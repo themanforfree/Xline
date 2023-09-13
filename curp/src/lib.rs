@@ -160,9 +160,9 @@ pub use curp_external_api::LogIndex;
 pub use rpc::ProtocolServer;
 /// Expose for madsim simulation tests.
 pub use rpc::{
-    protocol_client, ConfChange, ConfChangeError, ConfChangeType, FetchLeaderRequest,
-    FetchLeaderResponse, ProposeConfChangeRequest, ProposeConfChangeResponse, ProposeRequest,
-    ProposeResponse,
+    protocol_client, ConfChange, ConfChangeError, ConfChangeType, FetchClusterRequest,
+    FetchClusterResponse, FetchLeaderRequest, FetchLeaderResponse, ProposeConfChangeRequest,
+    ProposeConfChangeResponse, ProposeRequest, ProposeResponse,
 };
 
 /// Client side, sending requests and determining requests' state

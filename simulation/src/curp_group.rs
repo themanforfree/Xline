@@ -5,9 +5,10 @@ use curp::{
     client::{Client, ReadState},
     cmd::Command,
     error::{CommandProposeError, ProposeError},
-    members::{ClusterInfo, ServerId},
+    members::{ClusterInfo, Member, ServerId},
     server::Rpc,
-    FetchLeaderRequest, FetchLeaderResponse, LogIndex,
+    ConfChangeError, FetchClusterRequest, FetchClusterResponse, FetchLeaderRequest,
+    FetchLeaderResponse, LogIndex, ProposeConfChangeRequest,
 };
 use curp_test_utils::{
     test_cmd::{TestCE, TestCommand, TestCommandResult},
@@ -367,6 +368,20 @@ impl SimProtocolClient {
             .await
             .unwrap()
     }
+
+    #[inline]
+    pub async fn fetch_cluster(
+        &mut self,
+    ) -> Result<tonic::Response<FetchClusterResponse>, tonic::Status> {
+        let addr = self.addr.clone();
+        self.handle
+            .spawn(async move {
+                let mut client = ProtocolClient::connect(addr).await.unwrap();
+                client.fetch_cluster(FetchClusterRequest {}).await
+            })
+            .await
+            .unwrap()
+    }
 }
 
 pub struct SimClient<C: Command> {
@@ -384,6 +399,18 @@ impl<C: Command + 'static> SimClient<C> {
         let inner = self.inner.clone();
         self.handle
             .spawn(async move { inner.propose(cmd, use_fast_path).await })
+            .await
+            .unwrap()
+    }
+
+    #[inline]
+    pub async fn propose_conf_change(
+        &self,
+        conf_change: ProposeConfChangeRequest,
+    ) -> Result<Result<Vec<Member>, ConfChangeError>, CommandProposeError<C>> {
+        let inner = self.inner.clone();
+        self.handle
+            .spawn(async move { inner.propose_conf_change(conf_change).await })
             .await
             .unwrap()
     }

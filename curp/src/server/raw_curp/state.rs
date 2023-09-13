@@ -5,7 +5,10 @@ use std::{
 };
 
 use dashmap::{
-    mapref::one::{Ref, RefMut},
+    mapref::{
+        multiple::RefMulti,
+        one::{Ref, RefMut},
+    },
     DashMap,
 };
 use madsim::rand::{thread_rng, Rng};
@@ -46,7 +49,7 @@ pub(super) struct CandidateState<C> {
     /// Collected speculative pools, used for recovery
     pub(super) sps: HashMap<ServerId, Vec<Arc<C>>>,
     /// config in current cluster
-    pub(super) config: MajorityConfig,
+    pub(super) config: Config,
     /// Votes received in the election
     pub(super) votes_received: HashMap<ServerId, bool>,
 }
@@ -58,14 +61,27 @@ pub(super) struct FollowerStatus {
     pub(super) next_index: LogIndex,
     /// Index of highest log entry known to be replicated on that follower
     pub(super) match_index: LogIndex,
+    /// This node is a learner or not
+    pub(super) is_learner: bool,
+}
+
+impl Default for FollowerStatus {
+    fn default() -> Self {
+        Self {
+            next_index: 1,
+            match_index: 0,
+            is_learner: false,
+        }
+    }
 }
 
 impl FollowerStatus {
-    /// Create a `FollowerStatus`
-    pub(super) fn new(next_index: LogIndex, match_index: LogIndex) -> Self {
+    /// Create a new `FollowerStatus`
+    fn new(next_index: LogIndex, match_index: LogIndex, is_learner: bool) -> Self {
         Self {
             next_index,
             match_index,
+            is_learner,
         }
     }
 }
@@ -117,7 +133,7 @@ impl LeaderState {
         Self {
             statuses: others
                 .iter()
-                .map(|o| (*o, FollowerStatus::new(1, 0)))
+                .map(|o| (*o, FollowerStatus::default()))
                 .collect(),
         }
     }
@@ -131,8 +147,10 @@ impl LeaderState {
     }
 
     /// insert new status for id
-    pub(super) fn insert(&self, id: ServerId) {
-        _ = self.statuses.insert(id, FollowerStatus::new(1, 0));
+    pub(super) fn insert(&self, id: ServerId, is_learner: bool) {
+        _ = self
+            .statuses
+            .insert(id, FollowerStatus::new(1, 0, is_learner));
     }
 
     /// Remove a status
@@ -184,6 +202,11 @@ impl LeaderState {
         status.next_index = index + 1;
         debug!("follower {id}'s match_index updated to {index}");
     }
+
+    /// Create a `Iterator` for all statuses
+    pub(super) fn iter(&self) -> impl Iterator<Item = RefMulti<'_, ServerId, FollowerStatus>> {
+        self.statuses.iter()
+    }
 }
 
 impl<C> CandidateState<C> {
@@ -191,14 +214,14 @@ impl<C> CandidateState<C> {
     pub(super) fn new(voters: impl Iterator<Item = ServerId>) -> Self {
         Self {
             sps: HashMap::new(),
-            config: MajorityConfig::new(voters),
+            config: Config::new(voters),
             votes_received: HashMap::new(),
         }
     }
 
     /// Check if the candidate has won the election
     pub(super) fn check_vote(&self) -> VoteResult {
-        self.config.check_vote(&self.votes_received)
+        self.config.majority_config.check_vote(&self.votes_received)
     }
 }
 
@@ -215,32 +238,66 @@ pub(super) struct MajorityConfig {
     voters: HashSet<ServerId>,
 }
 
-impl MajorityConfig {
-    /// Create a new `MajorityConfig`
+/// Cluster config
+#[derive(Debug, Clone)]
+pub(super) struct Config {
+    /// The majority config
+    majority_config: MajorityConfig,
+    /// The learners in the cluster
+    learners: HashSet<ServerId>,
+}
+
+impl Config {
+    /// Create a new `Config`
     pub(super) fn new(voters: impl Iterator<Item = ServerId>) -> Self {
         Self {
-            voters: voters.collect(),
+            majority_config: MajorityConfig::new(voters),
+            learners: HashSet::new(),
         }
     }
 
     /// Get voters set
     pub(super) fn voters(&self) -> &HashSet<ServerId> {
-        &self.voters
+        &self.majority_config.voters
+    }
+
+    /// Get learners set
+    pub(super) fn learners(&self) -> &HashSet<ServerId> {
+        &self.learners
     }
 
     /// Insert a voter
-    pub(super) fn insert(&mut self, id: ServerId) -> bool {
-        self.voters.insert(id)
+    pub(super) fn insert(&mut self, id: ServerId, is_learner: bool) -> bool {
+        if is_learner {
+            self.learners.insert(id)
+        } else {
+            self.majority_config.voters.insert(id)
+        }
     }
 
-    /// Remove a voter
+    /// Remove a node
     pub(super) fn remove(&mut self, id: ServerId) -> bool {
-        self.voters.remove(&id)
+        let res1 = self.majority_config.voters.remove(&id);
+        let res2 = self.learners.remove(&id);
+        debug_assert_ne!(
+            res1, res2,
+            "a node should not exist in both voters and learners"
+        );
+        res1 || res2
     }
 
     /// Check if a voter exists
     pub(super) fn contains(&self, id: ServerId) -> bool {
-        self.voters.contains(&id)
+        self.majority_config.voters.contains(&id) || self.learners.contains(&id)
+    }
+}
+
+impl MajorityConfig {
+    /// Create a new `MajorityConfig`
+    fn new(voters: impl Iterator<Item = ServerId>) -> Self {
+        Self {
+            voters: voters.collect(),
+        }
     }
 
     /// Get quorum: the smallest number of servers who must be online for the cluster to work

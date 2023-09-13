@@ -1,7 +1,7 @@
 use dashmap::{mapref::one::Ref, DashMap};
 use itertools::Itertools;
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap},
+    collections::{hash_map::DefaultHasher, HashMap, HashSet},
     hash::Hasher,
 };
 
@@ -14,12 +14,17 @@ pub type ServerId = u64;
 impl Member {
     /// Create a new `Member`
     #[inline]
-    pub fn new(id: ServerId, name: impl Into<String>, address: impl Into<String>) -> Self {
+    pub fn new(
+        id: ServerId,
+        name: impl Into<String>,
+        address: impl Into<String>,
+        is_learner: bool,
+    ) -> Self {
         Self {
             id,
             name: name.into(),
             addrs: address.into(),
-            is_learner: false,
+            is_learner,
         }
     }
 
@@ -56,7 +61,7 @@ impl ClusterInfo {
             if name == self_name {
                 member_id = id;
             }
-            let member = Member::new(id, name, address);
+            let member = Member::new(id, name, address, false);
             let _ig = members.insert(id, member);
         }
         debug_assert!(member_id != 0, "self_id should not be 0");
@@ -93,11 +98,18 @@ impl ClusterInfo {
     /// Get all members
     #[must_use]
     #[inline]
-    pub fn get_members(&self) -> HashMap<ServerId, Member> {
+    pub fn all_members(&self) -> HashMap<ServerId, Member> {
         self.members
             .iter()
             .map(|t| (t.id, t.value().clone()))
             .collect()
+    }
+
+    /// Get all members vec
+    #[must_use]
+    #[inline]
+    pub fn all_members_vec(&self) -> Vec<Member> {
+        self.members.iter().map(|t| t.value().clone()).collect()
     }
 
     /// Insert a member
@@ -170,6 +182,17 @@ impl ClusterInfo {
             .collect()
     }
 
+    /// Get peers ids
+    #[must_use]
+    #[inline]
+    pub fn voters_ids(&self) -> HashSet<ServerId> {
+        self.members
+            .iter()
+            .filter(|t| !t.is_learner)
+            .map(|t| t.id)
+            .collect()
+    }
+
     /// Get all ids
     #[must_use]
     #[inline]
@@ -238,18 +261,11 @@ impl ClusterInfo {
             .collect()
     }
 
-    /// Get all members
-    #[must_use]
-    #[inline]
-    pub fn members(&self) -> Vec<Member> {
-        self.members.iter().map(|t| t.value().clone()).collect()
-    }
-
     /// Get length of peers
     #[must_use]
     #[inline]
-    pub fn members_len(&self) -> usize {
-        self.members.len()
+    pub fn voters_len(&self) -> usize {
+        self.members.iter().filter(|t| !t.is_learner).count()
     }
 
     /// Get id by name
@@ -303,7 +319,7 @@ mod tests {
         let node1_url = node1.self_address();
         assert!(!peers.contains_key(&node1_id));
         assert_eq!(peers.len(), 2);
-        assert_eq!(node1.members_len(), peers.len() + 1);
+        assert_eq!(node1.voters_len(), peers.len() + 1); // TODO fix test
 
         let peer_urls = peers.values().collect::<Vec<_>>();
 
